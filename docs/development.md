@@ -23,6 +23,25 @@ If you rename or move an existing checkout, configure a fresh build directory:
 CMake caches absolute source paths. The development launcher locates the checkout
 relative to itself and needs no path adjustment.
 
+## Scripted installation
+
+From the checkout, build and install a Release version with AI and PDF support:
+
+```bash
+./scripts/install-okulair.sh --install-deps
+"$HOME/.local/opt/okulair/bin/okulair" /path/to/paper.pdf
+```
+
+`--install-deps` uses apt and sudo to install Ubuntu/Debian dependencies; omit it
+when dependencies are already installed. The distribution must provide the
+required library versions. The script uses `build-install/` and installs into
+`~/.local/opt/okulair` by default. Use `--prefix PATH`, `--build-dir PATH`, and
+`--jobs N` to override these defaults; `--help` lists the options. Installation
+runs as your current user, so choose a writable prefix. The installed `okulair`
+launcher sets runtime paths and starts a separate D-Bus session. Run the script
+again to rebuild and update the installation. Handbook generation is disabled
+to avoid requiring KDE DocTools translation data.
+
 ## Ubuntu build environment
 
 Install core build dependencies (the PDF backend is required for these tests):
