@@ -9,6 +9,24 @@
 
 // clazy:excludeall=qstring-allocations
 
+#ifdef OKULAIR_AI_TESTS
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QComboBox>
+#include <QButtonGroup>
+#include <QAbstractButton>
+#include <QClipboard>
+#include <QMimeData>
+#include <QLineEdit>
+#include <QCheckBox>
+#include <QPlainTextEdit>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QDockWidget>
+#include <QMainWindow>
+#include <KMessageWidget>
+#endif
 #include <QSignalSpy>
 #include <QTest>
 #include <config-okular.h>
@@ -40,6 +58,7 @@
 #include <QImage>
 #include <QLineEdit>
 #include <QMenu>
+#include <QTabBar>
 #include <QMessageBox>
 #include <QMimeDatabase>
 #include <QPushButton>
@@ -71,6 +90,13 @@ private Q_SLOTS:
 
     void testZoomWithCrop();
     void testReload();
+    void testAiFocusedView_data();
+    void testAiFocusedView();
+    void testAiHighlightViewFiltering();
+    void testAiFigureRegion();
+    void testAiDarkSelectionColors();
+    void testClearHighlightsSave();
+    void testSaveKeepsAIRequest();
     void testExportMenuReload();
     void testCanceledReload();
     void testTOCReload();
@@ -195,6 +221,333 @@ void PartTest::testReload()
     QVERIFY(openDocument(&part, QStringLiteral(KDESRCDIR "data/file1.pdf")));
     part.reload();
     qApp->processEvents();
+}
+
+// OkulAIr regression: requests use real PDF selections/viewport, not all pages.
+void PartTest::testAiFigureRegion()
+{
+#ifndef OKULAIR_AI_TESTS
+    QSKIP("AI assistance disabled");
+#else
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("figure.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    QVariantList args;
+    Okular::Part part(nullptr, args);
+    QVERIFY(openDocument(&part, path));
+    part.widget()->resize(1400, 900); part.widget()->show();
+    QVERIFY(QTest::qWaitForWindowExposed(part.widget()));
+    QTRY_VERIFY(part.m_document->page(0)->hasPixmap(part.m_pageView));
+    QTest::qWait(100); // Let the dock layout and scroll ranges settle.
+    const auto origin = QPoint(part.m_pageView->horizontalScrollBar()->value(), part.m_pageView->verticalScrollBar()->value());
+    const auto center = origin + part.m_pageView->viewport()->rect().center();
+    const QRect region(center - QPoint(60, 40), QSize(120, 80));
+    QApplication::clipboard()->clear();
+    QVERIFY(QMetaObject::invokeMethod(part.m_pageView, "completeFigureSelection", Qt::DirectConnection, Q_ARG(QRect, region), Q_ARG(bool, false)));
+    QVERIFY(!QApplication::clipboard()->image().isNull());
+    QCOMPARE(QApplication::clipboard()->image().size(), region.size());
+    QSignalSpy figures(part.m_pageView, SIGNAL(assistantFigureSelected(int,Okular::NormalizedRect,QImage,bool)));
+    QVERIFY(QMetaObject::invokeMethod(part.m_pageView, "completeFigureSelection", Qt::DirectConnection, Q_ARG(QRect, region), Q_ARG(bool, true)));
+    QCOMPARE(figures.size(), 1);
+    QVERIFY(part.m_assistant->findChild<QPushButton *>(QStringLiteral("aiSelectionContext")));
+    QCOMPARE(part.m_assistant->findChild<QButtonGroup *>(QStringLiteral("aiScope"))->checkedId(), 1);
+    QMenu menu; QVERIFY(QMetaObject::invokeMethod(part.m_pageView, "addFigureActions", Qt::DirectConnection, Q_ARG(QMenu *, &menu)));
+    QCOMPARE(menu.actions().size(), 3);
+    QVERIFY(menu.actions().first()->text().contains(QStringLiteral("Ask AI about screenshot")));
+    QVERIFY(menu.actions().last()->text().contains(QStringLiteral("clipboard")));
+    menu.actions().last()->trigger();
+    const auto start = part.m_pageView->viewport()->rect().center() - QPoint(40, 30);
+    QApplication::clipboard()->clear();
+    QTest::mousePress(part.m_pageView->viewport(), Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseMove(part.m_pageView->viewport(), start + QPoint(80, 60));
+    QTest::mouseRelease(part.m_pageView->viewport(), Qt::LeftButton, Qt::NoModifier, start + QPoint(80, 60));
+    QVERIFY(!QApplication::clipboard()->image().isNull());
+    auto *tabs=part.m_assistant->findChild<QTabBar *>(QStringLiteral("aiWorkspaceTabs")); QVERIFY(tabs);
+    const auto chats=tabs->count();
+    QVERIFY(menu.actions().at(1)->text().contains(QStringLiteral("screenshot in a new chat")));
+    menu.actions().at(1)->trigger();
+    QTest::mousePress(part.m_pageView->viewport(), Qt::LeftButton, Qt::NoModifier, start);
+    QTest::mouseMove(part.m_pageView->viewport(), start + QPoint(80,60));
+    QTest::mouseRelease(part.m_pageView->viewport(), Qt::LeftButton, Qt::NoModifier, start + QPoint(80,60));
+    QCOMPARE(tabs->count(),chats+1); QCOMPARE(figures.size(),2); QVERIFY(figures.last().last().toBool());
+    QCOMPARE(part.m_assistant->findChild<QButtonGroup *>(QStringLiteral("aiScope"))->checkedId(),1);
+    auto selection=std::make_unique<Okular::RegularAreaRect>(); selection->append(Okular::NormalizedRect(.1,.1,.3,.3));
+    part.m_document->setPageTextSelection(0,std::move(selection),Qt::blue);
+    QMenu selectedMenu; QVERIFY(QMetaObject::invokeMethod(part.m_pageView,"addFigureActions",Qt::DirectConnection,Q_ARG(QMenu *, &selectedMenu)));
+    QVERIFY(selectedMenu.actions().isEmpty());
+
+#endif
+}
+
+void PartTest::testClearHighlightsSave()
+{
+#ifndef OKULAIR_AI_TESTS
+    QSKIP("AI assistance disabled");
+#else
+    QTemporaryDir directory; const auto path=directory.filePath(QStringLiteral("clear.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"),path));
+    Okular::Part part(nullptr,{}); QVERIFY(openDocument(&part,path));
+    auto add = [&](const QString &author, double left) {
+        auto *highlight=new Okular::HighlightAnnotation; highlight->setAuthor(author);
+        highlight->setBoundingRectangle(Okular::NormalizedRect(left,.2,left+.1,.23));
+        Okular::HighlightAnnotation::Quad quad;
+        quad.setPoint(Okular::NormalizedPoint(left,.23),0); quad.setPoint(Okular::NormalizedPoint(left+.1,.23),1);
+        quad.setPoint(Okular::NormalizedPoint(left+.1,.2),2); quad.setPoint(Okular::NormalizedPoint(left,.2),3);
+        highlight->highlightQuads().append(quad); part.m_document->addPageAnnotation(0,highlight,false);
+    };
+    add(QStringLiteral("Reader"),.1); add(QStringLiteral("Reader"),.25); add(QStringLiteral("AI assistant · fake-model"),.4); add(QStringLiteral("AI assistant · fake-model"),.55);
+    QVERIFY(part.saveAs(QUrl::fromLocalFile(path)));
+    for (const auto &name : {QStringLiteral("aiClearUserHighlights"),QStringLiteral("aiClearHighlights")}) {
+        auto *button=part.widget()->findChild<QPushButton *>(name); QVERIFY(button); button->click();
+        QVERIFY(part.saveAs(QUrl::fromLocalFile(path)));
+        QVERIFY(QFile::exists(path)); QVERIFY(part.m_document->isOpened());
+        const auto count = part.m_document->page(0)->annotations().size();
+        part.m_document->undo(); QCOMPARE(part.m_document->page(0)->annotations().size(), count+2);
+        part.m_document->redo(); QCOMPARE(part.m_document->page(0)->annotations().size(), count);
+    }
+    QCOMPARE(part.m_document->page(0)->annotations().size(),0);
+    Okular::Document reopened(nullptr); const auto mime=QMimeDatabase().mimeTypeForFile(path);
+    QCOMPARE(reopened.openDocument(path,QUrl::fromLocalFile(path),mime),Okular::Document::OpenSuccess);
+    QCOMPARE(reopened.page(0)->annotations().size(),0);
+#endif
+}
+
+void PartTest::testSaveKeepsAIRequest()
+{
+#ifndef OKULAIR_AI_TESTS
+    QSKIP("AI assistance disabled");
+#else
+    QTemporaryDir directory; const auto path=directory.filePath(QStringLiteral("running.pdf")); QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"),path));
+    Okular::Part part(nullptr,{}); QVERIFY(openDocument(&part,path));
+    QTcpServer server; QVERIFY(server.listen(QHostAddress::LocalHost)); QByteArray request;
+    connect(&server,&QTcpServer::newConnection,&server,[&] { auto *socket=server.nextPendingConnection(); connect(socket,&QTcpSocket::readyRead,socket,[&,socket] { request+=socket->readAll(); }); connect(socket,&QTcpSocket::disconnected,socket,&QObject::deleteLater); });
+    auto *settings=part.widget()->findChild<QWidget *>(QStringLiteral("aiSettings")); QVERIFY(settings);
+    settings->findChild<QComboBox *>(QStringLiteral("aiService"))->setCurrentIndex(0);
+    settings->findChild<QLineEdit *>(QStringLiteral("aiEndpoint"))->setText(QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort()));
+    settings->findChild<QLineEdit *>(QStringLiteral("aiModel"))->setText(QStringLiteral("fake-model"));
+    QTimer sharing; connect(&sharing,&QTimer::timeout,&part,[] { auto *dialog=qobject_cast<QMessageBox *>(QApplication::activeModalWidget()); if(dialog && dialog->objectName()==QLatin1String("aiSharingConfirmation")) dialog->button(QMessageBox::Yes)->click(); }); sharing.start(5);
+    part.m_assistant->findChild<QPlainTextEdit *>(QStringLiteral("aiQuestion"))->setPlainText(QStringLiteral("Request survives save"));
+    part.m_assistant->findChild<QPushButton *>(QStringLiteral("aiAsk"))->click(); QTRY_VERIFY(request.contains("Request survives save"));
+    auto *stop=part.m_assistant->findChild<QPushButton *>(QStringLiteral("aiStop")); QVERIFY(stop->isEnabled());
+    QVERIFY(part.saveAs(QUrl::fromLocalFile(path))); QVERIFY(stop->isEnabled()); QVERIFY(part.m_document->isOpened());
+    stop->click(); QVERIFY(!stop->isEnabled());
+#endif
+}
+
+void PartTest::testAiDarkSelectionColors()
+{
+#ifndef OKULAIR_AI_TESTS
+    QSKIP("AI assistance disabled");
+#else
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("dark.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    QVariantList args; Okular::Part part(nullptr, args);
+    QVERIFY(openDocument(&part, path));
+    Okular::Settings::setChangeColors(true);
+    Okular::Settings::setRenderMode(Okular::Settings::EnumRenderMode::Inverted);
+    QVERIFY(QMetaObject::invokeMethod(&part, "slotNewConfig", Qt::DirectConnection));
+    part.widget()->resize(1400, 900); part.widget()->show();
+    QVERIFY(QTest::qWaitForWindowExposed(part.widget()));
+    QTest::qWait(100);
+    QImage before;
+    QTRY_VERIFY(QMetaObject::invokeMethod(part.m_pageView, "documentViewImage", Qt::DirectConnection, Q_RETURN_ARG(QImage, before)) && !before.isNull());
+    Okular::RegularAreaRect area; area.append(Okular::NormalizedRect(0, 0, 1, 1));
+    part.m_document->setTransientHighlight(0x4F4145, 0, area, QColor(QStringLiteral("#A9CAFA")));
+    QImage after;
+    QVERIFY(QMetaObject::invokeMethod(part.m_pageView, "documentViewImage", Qt::DirectConnection, Q_RETURN_ARG(QImage, after)));
+    QCOMPARE(before.size(), after.size());
+    int bright = 0, preserved = 0, blue = 0;
+    for (int y = 20; y < before.height()-20; ++y) for (int x = 20; x < before.width()-20; ++x) {
+        const auto a = before.pixelColor(x,y), b = after.pixelColor(x,y);
+        if (a.red() > 160 && a.green() > 160 && a.blue() > 160) {
+            ++bright; if (b.red() >= a.red()-2 && b.green() >= a.green()-2 && b.blue() >= a.blue()-2) ++preserved;
+        }
+        if (a.red() < 20 && a.green() < 20 && a.blue() < 20 && b.blue() > b.red()+10) ++blue;
+    }
+    if (qEnvironmentVariableIsSet("OKULAIR_LAYOUT_PREVIEW")) { QVERIFY(before.save(QStringLiteral("/tmp/okulair-dark-before.png"))); QVERIFY(after.save(QStringLiteral("/tmp/okulair-dark-highlight.png"))); }
+    QVERIFY(bright > 100);
+    QVERIFY(preserved > bright * .95);
+    QVERIFY(blue > 1000);
+    part.m_document->setTransientHighlight(0x4F4145, -1, {}, {});
+    Okular::Settings::setChangeColors(false);
+#endif
+}
+
+void PartTest::testAiFocusedView_data()
+{
+    QTest::addColumn<bool>("tiled");
+    QTest::newRow("normal-page") << false;
+    QTest::newRow("zoomed-tiled-page") << true;
+}
+
+void PartTest::testAiFocusedView()
+{
+#ifndef OKULAIR_AI_TESTS
+    QSKIP("AI assistance disabled");
+#else
+    QTemporaryDir directory;
+    QFETCH(bool, tiled);
+    const auto path = directory.filePath(QStringLiteral("scoped.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    QVariantList dummyArgs;
+    Okular::Part part(nullptr, dummyArgs);
+    QVERIFY(openDocument(&part, path));
+    part.widget()->resize(1400, 900);
+    part.widget()->show();
+    QVERIFY(QTest::qWaitForWindowExposed(part.widget()));
+    QTRY_VERIFY(part.m_document->page(0)->hasPixmap(part.m_pageView));
+    auto *chat = part.m_assistant;
+    QVERIFY(chat);
+    auto *settings = part.widget()->findChild<QWidget *>(QStringLiteral("aiSettings"));
+    QVERIFY(settings);
+    QVERIFY(!chat->isAncestorOf(settings));
+    part.m_sidebar->setCurrentItem(settings);
+    auto *dock = part.widget()->findChild<QDockWidget *>(QStringLiteral("okulair_ai_chat"));
+    QVERIFY(dock);
+    QCOMPARE(dock->allowedAreas(), Qt::AllDockWidgetAreas);
+    auto *host = part.widget()->findChild<QMainWindow *>(QStringLiteral("okulairDocumentDocks"));
+    QVERIFY(host);
+    host->addDockWidget(Qt::RightDockWidgetArea, dock);
+    auto *scope = chat->findChild<QButtonGroup *>(QStringLiteral("aiScope"));
+    auto *question = chat->findChild<QPlainTextEdit *>(QStringLiteral("aiQuestion"));
+    QVERIFY(scope && question);
+    settings->findChild<QComboBox *>(QStringLiteral("aiService"))->setCurrentIndex(0);
+    QTcpServer server;
+    QVERIFY(server.listen(QHostAddress::LocalHost));
+    QByteArray wire;
+    connect(&server, &QTcpServer::newConnection, &server, [&] {
+        auto *socket = server.nextPendingConnection();
+        connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+        connect(socket, &QTcpSocket::readyRead, socket, [socket, &wire] {
+            wire += socket->readAll();
+            const auto split = wire.indexOf("\r\n\r\n");
+            if (split < 0 || socket->property("answered").toBool()) return;
+            int length = 0;
+            for (const auto &line : wire.left(split).split('\n')) if (line.toLower().startsWith("content-length:")) length = line.mid(15).trimmed().toInt();
+            if (wire.size() < split + 4 + length) return;
+            socket->setProperty("answered", true);
+            socket->write("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"Focused answer\"}}]}\n\ndata: [DONE]\n\n");
+            socket->disconnectFromHost();
+        });
+    });
+    settings->findChild<QLineEdit *>(QStringLiteral("aiEndpoint"))->setText(QStringLiteral("http://127.0.0.1:%1/v1").arg(server.serverPort()));
+    settings->findChild<QLineEdit *>(QStringLiteral("aiModel"))->setText(QStringLiteral("fixture-vision"));
+    QTimer sharingConfirmation;
+    connect(&sharingConfirmation, &QTimer::timeout, this, [&] {
+        auto *dialog = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (!dialog || dialog->objectName() != QLatin1String("aiSharingConfirmation")) return;
+        sharingConfirmation.stop();
+        dialog->button(QMessageBox::Yes)->click();
+    });
+    if (tiled) {
+        part.m_pageView->setCapability(Okular::View::ZoomModality, int(PageView::ZoomFixed));
+        part.m_pageView->setCapability(Okular::View::Zoom, 12.0);
+        QTRY_VERIFY(part.m_document->page(0)->hasTilesManager(part.m_pageView));
+        // Default dimensions reject even completed tiles: the original bug.
+        QVERIFY(!part.m_document->page(0)->hasPixmap(part.m_pageView));
+        part.m_pageView->horizontalScrollBar()->setValue(part.m_pageView->horizontalScrollBar()->maximum() * 2 / 3);
+        part.m_pageView->verticalScrollBar()->setValue(part.m_pageView->verticalScrollBar()->maximum() / 2);
+    }
+    const auto viewReady = [&] {
+        QImage image;
+        return QMetaObject::invokeMethod(part.m_pageView, "documentViewImage", Q_RETURN_ARG(QImage, image)) && !image.isNull();
+    };
+    QTRY_VERIFY(viewReady());
+    // PageView defers resize/zoom layout by 200 ms. Measure the settled view.
+    QTest::qWait(250);
+    QTRY_VERIFY(viewReady());
+    const QPoint beforeQuestion(part.m_pageView->horizontalScrollBar()->value(), part.m_pageView->verticalScrollBar()->value());
+    const auto beforeZoom = part.m_pageView->capability(Okular::View::Zoom);
+    scope->button(2)->click();
+    question->setPlainText(QStringLiteral("What is visible?"));
+    sharingConfirmation.start(5);
+    QTest::keyClick(question, Qt::Key_Return);
+    QTRY_VERIFY(wire.contains("data:image/png;base64,"));
+    QTRY_VERIFY(chat->findChild<QPushButton *>(QStringLiteral("aiAsk"))->isEnabled());
+    QCOMPARE(QPoint(part.m_pageView->horizontalScrollBar()->value(), part.m_pageView->verticalScrollBar()->value()), beforeQuestion);
+    QCOMPARE(part.m_pageView->capability(Okular::View::Zoom), beforeZoom);
+    auto body = QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object();
+    const auto currentImage = body.value(QStringLiteral("messages")).toArray().last().toObject().value(QStringLiteral("content")).toArray().last().toObject()
+        .value(QStringLiteral("image_url")).toObject().value(QStringLiteral("url")).toString();
+    const auto image = QImage::fromData(QByteArray::fromBase64(currentImage.mid(currentImage.indexOf(QLatin1Char(',')) + 1).toLatin1()));
+    QVERIFY(!image.isNull());
+    QVERIFY(image.width() <= 1600 && image.height() <= 1600);
+    part.m_document->requestTextPage(0);
+    auto *area = part.m_document->page(0)->findText(17, QStringLiteral("some random text"), Okular::FromTop, Qt::CaseSensitive);
+    QVERIFY(area && !area->isEmpty());
+    part.m_document->setPageTextSelection(0, std::unique_ptr<Okular::RegularAreaRect>(area), Qt::blue);
+    wire.clear();
+    const QPoint beforeSecondQuestion(part.m_pageView->horizontalScrollBar()->value(), part.m_pageView->verticalScrollBar()->value());
+    scope->button(1)->click();
+    question->setPlainText(QStringLiteral("Explain this selection"));
+    QTest::keyClick(question, Qt::Key_Return);
+    QTRY_VERIFY(wire.contains("Explain this selection"));
+    QTRY_VERIFY(chat->findChild<QPushButton *>(QStringLiteral("aiAsk"))->isEnabled());
+    QCOMPARE(QPoint(part.m_pageView->horizontalScrollBar()->value(), part.m_pageView->verticalScrollBar()->value()), beforeSecondQuestion);
+    body = QJsonDocument::fromJson(wire.mid(wire.indexOf("\r\n\r\n") + 4)).object();
+    const auto instructions = body.value(QStringLiteral("messages")).toArray().first().toObject().value(QStringLiteral("content")).toString();
+    QVERIFY(instructions.contains(QLatin1String("selected text")));
+    QVERIFY(instructions.contains(QLatin1String("some random text")));
+    QVERIFY(!instructions.contains(QLatin1String("I thought an empty pdf")));
+    QVERIFY(!wire.contains("data:image/png;base64,"));
+    if (qEnvironmentVariableIsSet("OKULAIR_LAYOUT_PREVIEW")) {
+        QVERIFY(part.widget()->grab().save(QStringLiteral("/tmp/okulair-pdf-layout-preview.png")));
+    }
+    // Use the same normal Save action behind Ctrl+S, with no assistant button.
+    QVERIFY(part.saveFile());
+    QVERIFY(!part.isModified());
+    // Ordinary reload must remain safe with a live dock and detached settings.
+    part.reload();
+    qApp->processEvents();
+#endif
+}
+
+void PartTest::testAiHighlightViewFiltering()
+{
+#ifndef OKULAIR_AI_TESTS
+    QSKIP("AI assistance disabled");
+#else
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("visibility.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    QVariantList args; Okular::Part part(nullptr, args);
+    QVERIFY(openDocument(&part, path)); part.widget()->resize(1400, 900); part.widget()->show();
+    QVERIFY(QTest::qWaitForWindowExposed(part.widget()));
+    part.m_document->requestTextPage(0);
+    std::unique_ptr<Okular::RegularAreaRect> area(part.m_document->page(0)->findText(0x4f4149, QStringLiteral("random"), Okular::FromTop, Qt::CaseSensitive));
+    QVERIFY(area && !area->isEmpty());
+    auto *annotation = new Okular::HighlightAnnotation;
+    annotation->setAuthor(QStringLiteral("AI assistant · test-model"));
+    annotation->setContents(QStringLiteral("AI assistant · test-model\nCategory: Keyword\n\nrandom\n\nCue"));
+    annotation->style().setColor(QColor(QStringLiteral("#F6D86B")));
+    auto bounds = area->first();
+    for (const auto &rect : *area) {
+        bounds |= rect; Okular::HighlightAnnotation::Quad quad;
+        quad.setPoint(Okular::NormalizedPoint(rect.left, rect.bottom), 0); quad.setPoint(Okular::NormalizedPoint(rect.right, rect.bottom), 1);
+        quad.setPoint(Okular::NormalizedPoint(rect.right, rect.top), 2); quad.setPoint(Okular::NormalizedPoint(rect.left, rect.top), 3);
+        annotation->highlightQuads().append(quad);
+    }
+    annotation->setBoundingRectangle(bounds);
+    part.m_document->addPageAnnotation(0, annotation, false);
+    QTest::qWait(250);
+    const auto snapshot = [&] { QImage image; QMetaObject::invokeMethod(part.m_pageView, "documentViewImage", Q_RETURN_ARG(QImage, image)); return image; };
+    QTRY_VERIFY(!snapshot().isNull());
+    auto *filter = part.widget()->findChild<QCheckBox *>(QStringLiteral("aiShowCategory_keyword")); QVERIFY(filter); filter->setChecked(true);
+    QTRY_VERIFY(!snapshot().isNull()); const auto visible = snapshot();
+    const auto viewport = part.m_document->viewport().toString();
+    part.m_document->setHistoryClean(true);
+    filter->setChecked(false);
+    QTRY_VERIFY(!snapshot().isNull() && snapshot() != visible);
+    QVERIFY(annotation->isHiddenInView()); QVERIFY(!(annotation->flags() & Okular::Annotation::Hidden)); QVERIFY(part.m_document->isHistoryClean());
+    QCOMPARE(part.m_document->viewport().toString(), viewport);
+    QString error; const auto saved = directory.filePath(QStringLiteral("saved.pdf")); QVERIFY2(part.m_document->saveChanges(saved, &error), qPrintable(error));
+    Okular::Document reopened(nullptr);
+    QVERIFY(reopened.openDocument(saved, QUrl::fromLocalFile(saved), QMimeDatabase().mimeTypeForFile(saved)) == Okular::Document::OpenSuccess);
+    QCOMPARE(reopened.page(0)->annotations().size(), 1);
+    QVERIFY(!(reopened.page(0)->annotations().first()->flags() & Okular::Annotation::Hidden));
+    filter->setChecked(true); QTRY_VERIFY(!snapshot().isNull() && snapshot() == visible);
+#endif
 }
 
 void PartTest::testExportMenuReload()

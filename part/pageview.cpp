@@ -419,6 +419,7 @@ public:
     ColorModeMenu *aColorModeMenu = nullptr;
     KToggleAction *aViewContinuous = nullptr;
     QAction *aPrevAction = nullptr;
+    int figureOperation = 0; // 1: ask, 2: clipboard, 3: ask in a new chat
     KToggleAction *aToggleForms = nullptr;
     QAction *aSpeakDoc = nullptr;
     QAction *aSpeakDocFromPage = nullptr;
@@ -1301,6 +1302,27 @@ QMimeData *PageView::getTableContents() const
     md->setHtml(selHtml);
 
     return md;
+}
+
+// OkulAIr modification, 2026-11-17: render document content for focused questions.
+QImage PageView::documentViewImage()
+{
+    if (!isVisible() || d->visibleItems.isEmpty()) return {};
+    const QRectF visibleView(horizontalScrollBar()->value(), verticalScrollBar()->value(), viewport()->width(), viewport()->height());
+    bool hasVisiblePage = false;
+    for (const auto *item : std::as_const(d->visibleItems)) {
+        if (!item->isVisible()) continue;
+        QRectF intersection = visibleView.intersected(item->croppedGeometry());
+        if (intersection.isEmpty()) continue;
+        hasVisiblePage = true;
+        // Tiled pages require explicit dimensions and only the visible region.
+        // Asking for hasPixmap(this) uses -1 dimensions and always fails for tiles.
+        intersection.translate(-item->uncroppedGeometry().topLeft());
+        const Okular::NormalizedRect region(intersection.left() / item->uncroppedWidth(), intersection.top() / item->uncroppedHeight(),
+                                            intersection.right() / item->uncroppedWidth(), intersection.bottom() / item->uncroppedHeight());
+        if (!item->page()->hasPixmap(this, item->uncroppedWidth(), item->uncroppedHeight(), region)) return {};
+    }
+    return hasVisiblePage ? viewport()->grab().toImage() : QImage();
 }
 
 void PageView::copyTextSelection(TextCopyMode mode) const
@@ -2365,6 +2387,7 @@ void PageView::keyPressEvent(QKeyEvent *e)
         }
         break;
     case Qt::Key_Escape:
+        d->figureOperation = 0;
         Q_EMIT escPressed();
         selectionClear(d->tableDividersGuessed ? ClearOnlyDividers : ClearAllSelection);
         textSelectionClear();
@@ -2947,6 +2970,7 @@ void PageView::mouseReleaseEvent(QMouseEvent *e)
                 addAnnotationActionsForPoint(annotPopup, pageItem, eventPos, &menu);
 
                 if (menu) {
+                    addFigureActions(menu);
                     menu->exec(e->globalPosition().toPoint());
                     menu->deleteLater();
                 } else {
@@ -3086,11 +3110,18 @@ void PageView::mouseReleaseEvent(QMouseEvent *e)
         }
 
         // if a selection is defined, display a popup
-        if ((!leftButton && !d->aPrevAction) || (!rightButton && d->aPrevAction) || !d->mouseSelecting) {
+        if ((!d->figureOperation && ((!leftButton && !d->aPrevAction) || (!rightButton && d->aPrevAction))) || !d->mouseSelecting) {
             break;
         }
 
         QRect selectionRect = d->mouseSelectionRect.normalized();
+        if (d->figureOperation) {
+            const bool ask = d->figureOperation != 2, newChat = d->figureOperation == 3; d->figureOperation = 0;
+            selectionClear();
+            if (selectionRect.width() > 8 && selectionRect.height() > 8) completeFigureSelection(selectionRect, ask, newChat);
+            if (d->aPrevAction) { d->aPrevAction->trigger(); d->aPrevAction = nullptr; }
+            break;
+        }
         if (selectionRect.width() <= 8 && selectionRect.height() <= 8) {
             selectionClear();
             if (d->aPrevAction) {
@@ -3356,10 +3387,20 @@ void PageView::mouseReleaseEvent(QMouseEvent *e)
 #if HAVE_SPEECH
                 const QAction *speakText = nullptr;
 #endif
+                if (!menu) menu = new QMenu(this);
+                if (!item->page()->textSelection()) addFigureActions(menu);
                 if (item->page()->textSelection()) {
                     if (!menu) {
                         menu = new QMenu(this);
                     }
+#ifdef OKULAIR_AI_ENABLED
+                    auto *askAssistant = menu->addAction(QIcon::fromTheme(QStringLiteral("dialog-messages")), i18n("Ask AI about selection"));
+                    askAssistant->setEnabled(d->document->isAllowed(Okular::AllowCopy));
+                    connect(askAssistant, &QAction::triggered, this, &PageView::askAssistantAboutSelection);
+                    auto *askNew = menu->addAction(QIcon::fromTheme(QStringLiteral("dialog-messages")), i18n("Ask AI about selection in a new chat"));
+                    askNew->setEnabled(d->document->isAllowed(Okular::AllowCopy));
+                    connect(askNew, &QAction::triggered, this, &PageView::askAssistantAboutSelectionInNewChat);
+#endif
                     textToClipboard = menu->addAction(QIcon::fromTheme(QStringLiteral("edit-copy")), i18n("Copy Text"));
                     textWithoutLineBreaksToClipboard = menu->addAction(QIcon::fromTheme(QStringLiteral("edit-copy-without-line-breaks")), i18n("Copy Text (Without line breaks)"));
 
@@ -6197,3 +6238,47 @@ void PageView::highlightSignatureFormWidget(const Okular::FormFieldSignature *fo
 #include "moc_pageview.cpp"
 
 #include "pageview.moc"
+
+// PDFs often omit figure boundaries, particularly for vector plots. A region
+// selection provides an exact, predictable fallback without including app chrome.
+void PageView::addFigureActions(QMenu *menu)
+{
+    for (uint page = 0; page < d->document->pages(); ++page) if (const auto *selection = d->document->page(page)->textSelection(); selection && !selection->isEmpty()) return;
+    for (const int operation : {1, 3, 2}) {
+        const bool ask = operation != 2;
+        auto *action = menu->addAction(QIcon::fromTheme(ask ? QStringLiteral("dialog-messages") : QStringLiteral("edit-copy")),
+            operation == 3 ? i18n("Ask AI about screenshot in a new chat") : ask ? i18n("Ask AI about screenshot") : i18n("Copy screenshot to clipboard"));
+        action->setEnabled(d->document->isAllowed(Okular::AllowCopy));
+        connect(action, &QAction::triggered, this, [this, operation] {
+            d->figureOperation = operation;
+            d->aPrevAction = d->mouseModeActionGroup->checkedAction();
+            if (d->aPrevAction == d->aMouseSelect) d->aPrevAction = nullptr;
+            d->aMouseSelect->trigger();
+            d->messageWindow->display(i18n("Drag a box around the area to capture. Press Esc to cancel."));
+            viewport()->setFocus();
+        });
+    }
+}
+
+void PageView::completeFigureSelection(const QRect &rect, bool ask, bool newChat)
+{
+    if (!d->document->isAllowed(Okular::AllowCopy)) return;
+    for (const auto *item : std::as_const(d->items)) {
+        if (!item->isVisible()) continue;
+        const QRect crop = rect.intersected(item->croppedGeometry());
+        if (crop.isEmpty()) continue;
+        if (qint64(crop.width()) * crop.height() > 16000000) {
+            d->messageWindow->display(i18n("Choose a smaller screenshot region.")); return;
+        }
+        const auto relative = crop.translated(-item->uncroppedGeometry().topLeft());
+        const Okular::NormalizedRect region(relative, item->uncroppedWidth(), item->uncroppedHeight());
+        if (!item->page()->hasPixmap(this, item->uncroppedWidth(), item->uncroppedHeight(), region)) {
+            d->messageWindow->display(i18n("Wait for the page to render and retry.")); return;
+        }
+        QImage image(crop.size(), QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+        QPainter painter(&image); painter.translate(-crop.topLeft()); drawDocumentOnPainter(crop, &painter); painter.end();
+        if (ask) Q_EMIT assistantFigureSelected(item->pageNumber(), region, image, newChat);
+        else { QApplication::clipboard()->setImage(image); d->messageWindow->display(i18n("Screenshot copied to clipboard.")); }
+        return;
+    }
+}

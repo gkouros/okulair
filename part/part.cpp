@@ -17,15 +17,23 @@
     Work sponsored by the LiMux project of the city of Munich:
     SPDX-FileCopyrightText: 2017 Klarälvdalens Datakonsult AB a KDAB Group company <info@kdab.com>
 
+    SPDX-FileCopyrightText: 2026 Georgios Kouros
+    OkulAIr modification, 2026-11-17: integrate the optional AI sidebar.
     SPDX-License-Identifier: GPL-2.0-or-later
 */
 
 #include "part.h"
 
+#ifdef OKULAIR_AI_ENABLED
+#include "ai/assistantwidget.h"
+#endif
+
 #include "config-okular.h"
 
 // qt/kde includes
 #include <QApplication>
+#include <QBuffer>
+#include <QMainWindow>
 #include <QClipboard>
 #include <QContextMenuEvent>
 #include <QCursor>
@@ -416,13 +424,32 @@ Part::Part(QObject *parent, const QVariantList &args)
     m_bookmarkList = new BookmarkList(m_document, nullptr);
     m_sidebar->addItem(m_bookmarkList, QIcon::fromTheme(QStringLiteral("bookmarks")), i18n("Bookmarks"));
 
+#ifdef OKULAIR_AI_ENABLED
+    auto *assistant = new OkulAIr::AssistantWidget(m_document, nullptr);
+    m_assistant = assistant;
+    m_sidebar->addItem(assistant->settingsWidget(), QIcon::fromTheme(QStringLiteral("dialog-messages")), i18n("AI settings"));
+    connect(assistant, &OkulAIr::AssistantWidget::settingsRequested, this, [this, assistant] {
+        m_sidebar->setCurrentItem(assistant->settingsWidget());
+        if (auto *action = actionCollection()->action(QStringLiteral("show_leftpanel")); action && !action->isChecked()) action->trigger();
+    });
+#endif
+
     // [left toolbox optional item: Signature Panel] | []
     m_signaturePanel = new SignaturePanel(m_document, nullptr);
     connect(m_signaturePanel.data(), &SignaturePanel::documentHasSignatures, this, &Part::enableSidebarSignaturesItem);
 
     // widgets: [] | [right 'pageView']
     QWidget *rightContainer = new QWidget(nullptr);
+#ifdef OKULAIR_AI_ENABLED
+    auto *chatHost = new QMainWindow;
+    chatHost->setObjectName(QStringLiteral("okulairDocumentDocks"));
+    chatHost->setDockNestingEnabled(true);
+    chatHost->setCentralWidget(rightContainer);
+    m_sidebar->setMainWidget(chatHost);
+    assistant->attachChatDock(chatHost);
+#else
     m_sidebar->setMainWidget(rightContainer);
+#endif
     QVBoxLayout *rightLayout = new QVBoxLayout(rightContainer);
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(0);
@@ -484,6 +511,79 @@ Part::Part(QObject *parent, const QVariantList &args)
     m_signatureInProgressMessage->addAction(finishSigningAction);
     rightLayout->addWidget(m_signatureInProgressMessage);
     m_pageView = new PageView(rightContainer, m_document);
+#ifdef OKULAIR_AI_ENABLED
+    // Read the selection/view only when the user submits an AI action.
+    assistant->setContextSource([this](bool selection) {
+        OkulAIr::FocusContext context;
+        QList<Okular::VisiblePageRect> regions;
+        if (selection) {
+            for (int number = 0; number < int(m_document->pages()); ++number) {
+                const auto *page = m_document->page(number);
+                if (const auto *area = page->textSelection(); area && !area->isEmpty()) {
+                    context.text += QStringLiteral("\n--- PAGE %1 (selected text) ---\n%2").arg(number + 1).arg(page->text(area, Okular::TextPage::CentralPixelTextAreaInclusionBehaviour));
+                    for (const auto &rect : *area) regions.append(Okular::VisiblePageRect(number, rect));
+                }
+            }
+            // A clicked existing highlight can also supply context.
+            if (context.text.isEmpty()) {
+                const auto *annotation = m_pageView->focusedAnnotation();
+                const int number = m_pageView->focusedAnnotationPageNumber();
+                if (annotation && annotation->subType() == Okular::Annotation::AHighlight && number >= 0) {
+                    Okular::RegularAreaRect area;
+                    for (const auto &quad : static_cast<const Okular::HighlightAnnotation *>(annotation)->highlightQuads()) {
+                        double left = 1, top = 1, right = 0, bottom = 0;
+                        for (int i = 0; i < 4; ++i) { const auto point = quad.point(i); left = qMin(left, point.x); right = qMax(right, point.x); top = qMin(top, point.y); bottom = qMax(bottom, point.y); }
+                        area.append(Okular::NormalizedRect(left, top, right, bottom));
+                        regions.append(Okular::VisiblePageRect(number, area.last()));
+                    }
+                    m_document->requestTextPage(number);
+                    context.text = QStringLiteral("\n--- PAGE %1 (highlight) ---\n%2").arg(number + 1).arg(m_document->page(number)->text(&area, Okular::TextPage::CentralPixelTextAreaInclusionBehaviour));
+                }
+            }
+            if (regions.isEmpty()) return context;
+            context.label = i18n("Selected text");
+        } else {
+            for (const auto *region : m_document->visiblePageRects()) {
+                if (region->pageNumber < 0 || region->pageNumber >= int(m_document->pages())) continue;
+                regions.append(*region);
+                m_document->requestTextPage(region->pageNumber);
+                Okular::RegularAreaRect area;
+                area.append(region->rect);
+                context.text += QStringLiteral("\n--- PAGE %1 (visible area) ---\n%2").arg(region->pageNumber + 1)
+                    .arg(m_document->page(region->pageNumber)->text(&area, Okular::TextPage::CentralPixelTextAreaInclusionBehaviour));
+            }
+            if (regions.isEmpty()) return context;
+            auto image = m_pageView->documentViewImage();
+            if (image.isNull()) { context.error = i18n("The document view is not ready. Wait for the page to render and retry."); return context; }
+            image = image.scaled(QSize(1600, 1600), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            QBuffer buffer(&context.image);
+            buffer.open(QIODevice::WriteOnly);
+            if (!image.save(&buffer, "PNG")) { context.error = i18n("Could not prepare the visible document image."); return context; }
+            context.label = i18n("Current view (text + image)");
+        }
+        QStringList pages;
+        for (const auto &region : regions) {
+            const auto label = QString::number(region.pageNumber + 1);
+            if (!pages.contains(label)) pages.append(label);
+            context.regions.append(QJsonObject{{QStringLiteral("page"), region.pageNumber}, {QStringLiteral("left"), region.rect.left}, {QStringLiteral("top"), region.rect.top},
+                {QStringLiteral("right"), region.rect.right}, {QStringLiteral("bottom"), region.rect.bottom}});
+        }
+        context.label += i18n(" · p. %1", pages.join(QStringLiteral(", ")));
+        return context;
+    });
+    connect(m_pageView, &PageView::askAssistantAboutSelection, assistant, [assistant] { assistant->showChat(true); });
+    connect(m_pageView, &PageView::askAssistantAboutSelectionInNewChat, assistant, [assistant] { assistant->openSelectionChat(true); });
+    connect(m_pageView, &PageView::assistantFigureSelected, assistant, [this, assistant](int page, const Okular::NormalizedRect &region, const QImage &image, bool newChat) {
+        OkulAIr::FocusContext context;
+        context.label = i18n("Screenshot · p. %1", page + 1);
+        m_document->requestTextPage(page);
+        Okular::RegularAreaRect area; area.append(region);
+        context.text = QStringLiteral("--- PAGE %1 (figure region) ---\n%2").arg(page + 1).arg(m_document->page(page)->text(&area));
+        context.regions.append(QJsonObject{{QStringLiteral("page"), page}, {QStringLiteral("left"), region.left}, {QStringLiteral("top"), region.top}, {QStringLiteral("right"), region.right}, {QStringLiteral("bottom"), region.bottom}});
+        QBuffer buffer(&context.image); buffer.open(QIODevice::WriteOnly); image.save(&buffer, "PNG");
+        assistant->prepareSelection(context, newChat);
+    });
+#endif
     rightContainer->setFocusProxy(m_pageView);
     QMetaObject::invokeMethod(m_pageView, "setFocus", Qt::QueuedConnection); // usability setting
     //    m_splitter->setFocusProxy(m_pageView);
@@ -991,6 +1091,8 @@ Part::~Part()
     delete m_bookmarkList;
     delete m_infoTimer;
     delete m_signaturePanel;
+
+    delete m_assistant;
 
     delete m_document;
 
@@ -3180,7 +3282,12 @@ void Part::slotShowTOCMenu(const Okular::DocumentViewport &vp, const QPoint poin
 
 void Part::slotShowMenu(const Okular::Page *page, const QPoint point)
 {
+#ifdef OKULAIR_AI_ENABLED
+    // Figure tools are only added to document-view context menus.
+    m_pageView->setProperty("figureContextMenu", true);
+#endif
     showMenu(page, point);
+    m_pageView->setProperty("figureContextMenu", false);
 }
 
 void Part::showMenu(const Okular::Page *page, const QPoint point, const QString &bookmarkTitle, const Okular::DocumentViewport &vp, bool showTOCActions)
@@ -3200,6 +3307,12 @@ void Part::showMenu(const Okular::Page *page, const QPoint point, const QString 
     }
 
     QMenu popup;
+#ifdef OKULAIR_AI_ENABLED
+    if (page && m_pageView->property("figureContextMenu").toBool()) {
+        m_pageView->addFigureActions(&popup);
+        reallyShow = true;
+    }
+#endif
     if (showTOCActions) {
         popup.addAction(i18n("Expand Whole Section"), m_toc.data(), &TOC::expandRecursively);
         popup.addAction(i18n("Collapse Whole Section"), m_toc.data(), &TOC::collapseRecursively);

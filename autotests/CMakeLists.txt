@@ -35,6 +35,10 @@ if(BUILD_DESKTOP AND OKULAIR_AI)
             TEST_NAME "aisessionstoretest"
             LINK_LIBRARIES Qt6::Widgets Qt6::Test okularcore
         )
+        ecm_add_test(aiassistanttest.cpp ../part/ai/chatgptauth.cpp ../part/ai/assistantwidget.cpp ../part/ai/workspaces.cpp ../part/ai/requests.cpp ../part/ai/readingtools.cpp ../part/ai/session.cpp ../part/ai/sessionstore.cpp ../part/ai/provider.cpp
+            TEST_NAME "aiassistanttest"
+            LINK_LIBRARIES Qt6::Widgets Qt6::Test Qt6::Network okularcore KF6::ConfigCore KF6::I18n KF6::WidgetsAddons OpenSSL::Crypto
+        )
     endif()
 endif()
 
@@ -49,6 +53,10 @@ if(Poppler_Qt6_FOUND)
             TEST_NAME "parttest"
             LINK_LIBRARIES Qt6::Widgets Qt6::Test Qt6::Xml okularcore okularpart
         )
+        if(OKULAIR_AI)
+            target_compile_definitions(parttest PRIVATE OKULAIR_AI_TESTS)
+            target_link_libraries(parttest Qt6::Network)
+        endif()
     endif()
 
     ecm_add_test(visibilitytest.cpp

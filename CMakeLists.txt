@@ -581,8 +581,13 @@ if (OKULAIR_AI)
         part/ai/sessionstore.cpp
         part/ai/provider.cpp
         part/ai/chatgptauth.cpp
+        part/ai/assistantwidget.cpp
+        part/ai/workspaces.cpp
+        part/ai/requests.cpp
+        part/ai/readingtools.cpp
     )
     target_link_libraries(okularpart Qt6::Network OpenSSL::Crypto)
+    target_compile_definitions(okularpart PRIVATE OKULAIR_AI_ENABLED)
 endif()
 generate_export_header(okularpart BASE_NAME okularpart)
 

@@ -9,6 +9,8 @@
     Work sponsored by the LiMux project of the city of Munich:
     SPDX-FileCopyrightText: 2017 Klarälvdalens Datakonsult AB a KDAB Group company <info@kdab.com>
 
+    SPDX-FileCopyrightText: 2026 Georgios Kouros
+    OkulAIr modification, 2026-11-17: own the optional AI sidebar widget.
     SPDX-License-Identifier: GPL-2.0-or-later
 */
 
@@ -76,6 +78,11 @@ class BookmarkList;
 class DrawingToolActions;
 class Layers;
 class SignaturePanel;
+
+namespace OkulAIr
+{
+class AssistantWidget;
+}
 
 #if HAVE_PURPOSE
 namespace Purpose
@@ -358,6 +365,8 @@ private:
 
     // main widgets
     Sidebar *m_sidebar;
+    // QWidget ownership is explicit so the document observer dies before Document.
+    QWidget *m_assistant = nullptr;
     SearchWidget *m_searchWidget;
     FindBar *m_findBar;
     KMessageWidget *m_migrationMessage;

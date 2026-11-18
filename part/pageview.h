@@ -141,6 +141,10 @@ public:
     void showNoSigningCertificatesDialog(bool nonDateValidCerts);
 
     Okular::Document *document() const;
+    // Document viewport only; no desktop, sidebar, or chat content.
+    Q_INVOKABLE QImage documentViewImage();
+    Q_INVOKABLE void addFigureActions(QMenu *menu);
+    Q_INVOKABLE void completeFigureSelection(const QRect &rect, bool ask, bool newChat = false);
 
     void startSigning(Okular::SignatureAnnotation *signatureAnnotation);
 
@@ -173,6 +177,9 @@ Q_SIGNALS:
      * \param pageNumber page to show (1-indexed)
      */
     void requestOpenNewlySignedFile(const QString &filePath, int pageNumber);
+    void askAssistantAboutSelection();
+    void askAssistantAboutSelectionInNewChat();
+    void assistantFigureSelected(int page, const Okular::NormalizedRect &region, const QImage &image, bool newChat);
     void signingStarted();
     void signingFinished();
 
