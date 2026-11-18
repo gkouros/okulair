@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Georgios Kouros
+SPDX-License-Identifier: GPL-2.0-or-later
+Original OkulAIr vector artwork, introduced and revised 2026-11-17.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">OkulAIr</title>
+  <desc id="desc">A smiling paper character peers through a mint lens, surrounded by peach and lilac glints.</desc>
+  <rect x="8" y="8" width="240" height="240" rx="64" fill="#FFF1DB"/>
+  <g transform="rotate(-7 128 128)">
+    <path d="M66 48H146L179 81V197Q179 210 166 210H66Q53 210 53 197V61Q53 48 66 48Z" fill="#28384D"/>
+    <path d="M62 40H142L175 73V189Q175 202 162 202H62Q49 202 49 189V53Q49 40 62 40Z" fill="#FFFEF8" stroke="#28384D" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M142 42V62Q142 73 153 73H174" fill="#DACDF7" stroke="#28384D" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M72 70H108M72 85H96" stroke="#B6A3DA" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="75" cy="117" r="7" fill="#28384D"/>
+    <circle cx="72" cy="113" r="2" fill="#FFFEF8"/>
+    <circle cx="130" cy="117" r="8" fill="#28384D"/>
+    <circle cx="126" cy="113" r="2.5" fill="#FFFEF8"/>
+    <ellipse cx="73" cy="135" rx="10" ry="5" fill="#FFB5A2"/>
+    <path d="M91 164Q106 178 121 164" fill="none" stroke="#28384D" stroke-width="5" stroke-linecap="round"/>
+    <path d="M75 187H118" stroke="#B6A3DA" stroke-width="6" stroke-linecap="round"/>
+    <path d="M159 146L192 180" stroke="#28384D" stroke-width="18" stroke-linecap="round"/>
+    <path d="M159 146L192 180" stroke="#38C4AF" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="132" cy="117" r="38" fill="#65DFCA" fill-opacity=".12" stroke="#28384D" stroke-width="15"/>
+    <circle cx="132" cy="117" r="38" fill="none" stroke="#65DFCA" stroke-width="8"/>
+    <path d="M111 96Q119 89 130 89" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" fill="none"/>
+  </g>
+  <path d="M203 37L208 51L222 56L208 61L203 75L198 61L184 56L198 51Z" fill="#FFAD70" stroke="#28384D" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M32 109L34 117L42 119L34 121L32 129L30 121L22 119L30 117Z" fill="#B6A3DA"/>
+  <path d="M198 207L204 213M213 194L221 196" stroke="#B6A3DA" stroke-width="4" stroke-linecap="round"/>
+</svg>

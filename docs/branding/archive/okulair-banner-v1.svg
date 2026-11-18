@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Georgios Kouros
+SPDX-License-Identifier: GPL-2.0-or-later
+Original OkulAIr vector artwork, introduced 2026-11-17.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="320" viewBox="0 0 1120 320" role="img" aria-labelledby="title desc">
+  <title id="title">OkulAIr — A new lens on your documents.</title>
+  <desc id="desc">OkulAIr wordmark with AI in mint green, a document-and-lens icon, and Independent fork of Okular attribution.</desc>
+  <rect width="1120" height="320" rx="24" fill="#102638"/>
+  <g transform="translate(38 32)">
+    <path d="M69 43H143L175 75V189Q175 199 165 199H69Q59 199 59 189V53Q59 43 69 43Z" fill="#EDF5FA"/>
+    <path d="M143 43V65Q143 75 153 75H175" fill="#B7CAD6"/>
+    <path d="M81 86H127M81 108H151M81 130H142M81 152H135M81 174H117" fill="none" stroke="#6A8599" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="139" cy="143" r="49" fill="#102638" fill-opacity=".12" stroke="#102638" stroke-width="18"/>
+    <path d="M174 178L204 208" fill="none" stroke="#64E0CA" stroke-width="17" stroke-linecap="round"/>
+    <circle cx="139" cy="143" r="49" fill="none" stroke="#64E0CA" stroke-width="10"/>
+    <path d="M192 43L197 57L211 62L197 67L192 81L187 67L173 62L187 57Z" fill="#64E0CA"/>
+  </g>
+  <path d="M296 70V250" stroke="#355064" stroke-width="1"/>
+  <g font-family="DejaVu Sans, sans-serif">
+    <text x="340" y="145" font-size="78" font-weight="700" letter-spacing="-3" fill="#EDF5FA">Okul<tspan fill="#64E0CA">AI</tspan>r</text>
+    <text x="344" y="196" font-size="29" fill="#CEDCE5">A new lens on your documents.</text>
+    <text x="345" y="244" font-size="17" letter-spacing="1.4" fill="#90ADBF">INDEPENDENT FORK OF OKULAR</text>
+  </g>
+</svg>

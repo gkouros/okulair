@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: 2026 Georgios Kouros
+SPDX-License-Identifier: GPL-2.0-or-later
+Original OkulAIr vector artwork, introduced and revised 2026-11-17.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="320" viewBox="0 0 1120 320" role="img" aria-labelledby="title desc">
+  <title id="title">OkulAIr — A new lens on your documents.</title>
+  <desc id="desc">A cheerful paper character with a mint lens beside a playful OkulAIr wordmark and the tagline A new lens on your documents.</desc>
+  <rect width="1120" height="320" rx="32" fill="#FFF8ED"/>
+  <circle cx="163" cy="160" r="123" fill="#F0E5FD"/>
+  <g transform="translate(34 31)"><g transform="rotate(-7 128 128)">
+    <path d="M66 48H146L179 81V197Q179 210 166 210H66Q53 210 53 197V61Q53 48 66 48Z" fill="#28384D"/>
+    <path d="M62 40H142L175 73V189Q175 202 162 202H62Q49 202 49 189V53Q49 40 62 40Z" fill="#FFFEF8" stroke="#28384D" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M142 42V62Q142 73 153 73H174" fill="#DACDF7" stroke="#28384D" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M72 70H108M72 85H96" stroke="#B6A3DA" stroke-width="6" stroke-linecap="round"/>
+    <circle cx="75" cy="117" r="7" fill="#28384D"/>
+    <circle cx="72" cy="113" r="2" fill="#FFFEF8"/>
+    <circle cx="130" cy="117" r="8" fill="#28384D"/>
+    <circle cx="126" cy="113" r="2.5" fill="#FFFEF8"/>
+    <ellipse cx="73" cy="135" rx="10" ry="5" fill="#FFB5A2"/>
+    <path d="M91 164Q106 178 121 164" fill="none" stroke="#28384D" stroke-width="5" stroke-linecap="round"/>
+    <path d="M75 187H118" stroke="#B6A3DA" stroke-width="6" stroke-linecap="round"/>
+    <path d="M159 146L192 180" stroke="#28384D" stroke-width="18" stroke-linecap="round"/>
+    <path d="M159 146L192 180" stroke="#38C4AF" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="132" cy="117" r="38" fill="#65DFCA" fill-opacity=".12" stroke="#28384D" stroke-width="15"/>
+    <circle cx="132" cy="117" r="38" fill="none" stroke="#65DFCA" stroke-width="8"/>
+    <path d="M111 96Q119 89 130 89" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" fill="none"/>
+  </g>
+  <path d="M203 37L208 51L222 56L208 61L203 75L198 61L184 56L198 51Z" fill="#FFAD70" stroke="#28384D" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M32 109L34 117L42 119L34 121L32 129L30 121L22 119L30 117Z" fill="#B6A3DA"/>
+  <path d="M198 207L204 213M213 194L221 196" stroke="#B6A3DA" stroke-width="4" stroke-linecap="round"/></g>
+  <g font-family="DejaVu Sans, sans-serif">
+    <g transform="rotate(-2 530 137)">
+      <rect x="512" y="66" width="123" height="100" rx="26" fill="#B9F0DF" transform="rotate(5 573 116)"/>
+      <text x="333" y="145" font-size="78" font-weight="700" letter-spacing="-3" fill="#28384D">Okul<tspan fill="#168A7D">AI</tspan>r</text>
+    </g>
+    <text x="337" y="211" font-size="29" fill="#4C5D70">A new lens on your documents.</text>
+  </g>
+  <path d="M339 235Q454 249 566 234" stroke="#FFAD70" stroke-width="7" stroke-linecap="round" fill="none"/>
+  <path d="M955 71L959 82L970 86L959 90L955 101L951 90L940 86L951 82Z" fill="#B6A3DA"/>
+  <circle cx="1015" cy="226" r="7" fill="#65DFCA"/>
+  <path d="M999 112L1006 105M1021 126L1032 124" stroke="#FFAD70" stroke-width="5" stroke-linecap="round"/>
+</svg>

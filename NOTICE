@@ -1,0 +1,55 @@
+OkulAIr — A new lens on your documents.
+
+OkulAIr is an independent fork of Okular, developed by the KDE community.
+Upstream project: https://okular.kde.org/
+Upstream source: https://invent.kde.org/graphics/okular
+Fork source: https://github.com/gkouros/okulair
+
+This fork is not an official KDE project or an official Okular release.
+It is not affiliated with or endorsed by KDE or the upstream Okular maintainers.
+Upstream names identify the origin of the software.
+
+The inherited software remains the work of its respective copyright holders.
+Their file-level notices and upstream author/credit lists remain in place,
+including aboutdata.h and source headers. No claim is made to sole authorship
+of the inherited code or ownership of upstream names or artwork.
+
+Fork modifications documented on 2026-11-17:
+- Introduced the OkulAIr name and tagline in the fork README.
+- Added original vector branding and PNG exports under docs/branding/.
+- Refined the branding to a document-and-lens mark; fork attribution remains
+  in documentation and notices rather than on the active logo.
+- Added an AI-assistance architecture and implementation plan.
+- Added fork attribution and licensing/distribution guidance.
+- Preserved the original README as README.upstream.md and added COPYING as
+  an unchanged copy of LICENSES/GPL-2.0-or-later.txt.
+
+Initial experimental implementation on 2026-11-17:
+- Added native desktop chat, summary, and reviewed-highlight workflows.
+- Added OpenAI, Anthropic, and compatible streaming adapters.
+- Added versioned AI history in a standard PDF note, local recovery, and tests.
+- Added native ChatGPT browser authentication and plan model discovery.
+- Added API-key presets and model discovery for DeepSeek, Gemini, Groq,
+  Mistral, OpenRouter, and Grok, with visible connection errors.
+- Added OpenSSL 3 Crypto as an AI-build dependency for identity verification.
+- Separated AI connection settings from movable chat docks, added keyboard
+  submission and selection/current-view context (with in-memory image inputs).
+- Kept highlight generation out of chat, added model author/date metadata,
+  and removed assistant Save PDF/Export buttons in favor of normal saving.
+- Preserved reading position during background chat-note writes with optional
+  annotation navigation, including history undo/redo; manual edits still navigate.
+- Added per-PDF/service sharing confirmation with remembered local approval,
+  message cards and user-controlled streaming scroll; moved scope/status controls
+  around the prompt composer.
+- Added persistent image/text/PDF-text chat attachments, rounded message cards,
+  batched incremental streaming, clear controls, and icon-and-text scope buttons.
+- Added persistent chat tabs and selected figure/text context,
+  selection quick actions, and exact-quote evidence navigation.
+- Added background, density-aware reading highlights, editable category colors,
+  category regeneration, optional manual-highlight explanations, and view filters.
+- Added a cancellable request queue and official-client account adapters for
+  Gemini, GitHub Copilot and Qwen; fixed saving after grouped annotation removal.
+Application, package, and installation identifiers still use upstream names.
+
+See LICENSE.md and individual files for licensing terms. This notice does not
+add restrictions to any applicable license.
