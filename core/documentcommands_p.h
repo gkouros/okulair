@@ -34,7 +34,7 @@ public:
 class AddAnnotationCommand : public OkularUndoCommand
 {
 public:
-    AddAnnotationCommand(Okular::DocumentPrivate *docPriv, Okular::Annotation *annotation, int pageNumber);
+    AddAnnotationCommand(Okular::DocumentPrivate *docPriv, Okular::Annotation *annotation, int pageNumber, bool moveViewport = true);
 
     ~AddAnnotationCommand() override;
 
@@ -49,12 +49,13 @@ private:
     Okular::Annotation *m_annotation;
     int m_pageNumber;
     bool m_done;
+    bool m_moveViewport;
 };
 
 class RemoveAnnotationCommand : public OkularUndoCommand
 {
 public:
-    RemoveAnnotationCommand(Okular::DocumentPrivate *doc, Okular::Annotation *annotation, int pageNumber);
+    RemoveAnnotationCommand(Okular::DocumentPrivate *doc, Okular::Annotation *annotation, int pageNumber, bool moveViewport = true);
     ~RemoveAnnotationCommand() override;
     void undo() override;
     void redo() override;
@@ -66,6 +67,7 @@ private:
     Okular::Annotation *m_annotation;
     int m_pageNumber;
     bool m_done;
+    bool m_moveViewport;
 };
 
 class ModifyAnnotationPropertiesCommand : public OkularUndoCommand
@@ -163,7 +165,7 @@ protected:
 class EditAnnotationContentsCommand : public EditTextCommand
 {
 public:
-    EditAnnotationContentsCommand(Okular::DocumentPrivate *docPriv, Okular::Annotation *annotation, int pageNumber, const QString &newContents, int newCursorPos, const QString &prevContents, int prevCursorPos, int prevAnchorPos);
+    EditAnnotationContentsCommand(Okular::DocumentPrivate *docPriv, Okular::Annotation *annotation, int pageNumber, const QString &newContents, int newCursorPos, const QString &prevContents, int prevCursorPos, int prevAnchorPos, bool moveViewport = true);
 
     void undo() override;
     void redo() override;
@@ -176,6 +178,7 @@ private:
     Okular::DocumentPrivate *m_docPriv;
     Okular::Annotation *m_annotation;
     int m_pageNumber;
+    bool m_moveViewport;
 };
 
 class EditFormTextCommand : public EditTextCommand

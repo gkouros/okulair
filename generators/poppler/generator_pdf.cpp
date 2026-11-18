@@ -1328,6 +1328,14 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
     // note: thread safety is set on 'false' for the GUI (this) thread
     std::unique_ptr<Poppler::Page> p = pdfdoc->page(page->number());
 
+    QList<QPair<Poppler::Annotation *, Poppler::Annotation::Flags>> filteredAnnotations;
+    for (auto *annotation : page->annotations()) {
+        if (!annotation->isHiddenInView()) continue;
+        auto *native = qvariant_cast<Poppler::Annotation *>(annotation->nativeId());
+        if (!native) continue;
+        filteredAnnotations.append({native, native->flags()});
+        native->setFlags(native->flags() | Poppler::Annotation::Hidden);
+    }
     // 2. Take data from outputdev and attach it to the Page
     QImage img;
     if (p) {
@@ -1354,6 +1362,8 @@ QImage PDFGenerator::image(Okular::PixmapRequest *request)
         img = QImage(request->width(), request->height(), QImage::Format_Mono);
         img.fill(Qt::white);
     }
+
+    for (const auto &entry : filteredAnnotations) entry.first->setFlags(entry.second);
 
     if (p && genObjectRects) {
         // TODO previously we extracted Image type rects too, but that needed porting to poppler

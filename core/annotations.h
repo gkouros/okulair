@@ -281,6 +281,8 @@ public:
      * @see @ref Flag
      */
     int flags() const;
+    /** Transient viewer filtering, never serialized to the document. */
+    bool isHiddenInView() const;
 
     /**
      * Sets the bounding @p rectangle of the annotation.

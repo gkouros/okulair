@@ -3458,11 +3458,16 @@ void Document::recalculateForms()
 
 void Document::addPageAnnotation(int page, Annotation *annotation)
 {
+    addPageAnnotation(page, annotation, true);
+}
+
+void Document::addPageAnnotation(int page, Annotation *annotation, bool moveViewport)
+{
     // Transform annotation's base boundary rectangle into unrotated coordinates
     Page *p = d->m_pagesVector[page];
     QTransform t = p->d->rotationMatrix();
     annotation->d_ptr->baseTransform(t.inverted());
-    QUndoCommand *uc = new AddAnnotationCommand(this->d, annotation, page);
+    QUndoCommand *uc = new AddAnnotationCommand(this->d, annotation, page, moveViewport);
     d->m_undoStack->push(uc);
 }
 
@@ -3534,8 +3539,13 @@ void Document::adjustPageAnnotation(int page, Annotation *annotation, const Okul
 
 void Document::editPageAnnotationContents(int page, Annotation *annotation, const QString &newContents, int newCursorPos, int prevCursorPos, int prevAnchorPos)
 {
+    editPageAnnotationContents(page, annotation, newContents, newCursorPos, prevCursorPos, prevAnchorPos, true);
+}
+
+void Document::editPageAnnotationContents(int page, Annotation *annotation, const QString &newContents, int newCursorPos, int prevCursorPos, int prevAnchorPos, bool moveViewport)
+{
     QString prevContents = annotation->contents();
-    QUndoCommand *uc = new EditAnnotationContentsCommand(d, annotation, page, newContents, newCursorPos, prevContents, prevCursorPos, prevAnchorPos);
+    QUndoCommand *uc = new EditAnnotationContentsCommand(d, annotation, page, newContents, newCursorPos, prevContents, prevCursorPos, prevAnchorPos, moveViewport);
     d->m_undoStack->push(uc);
 }
 
@@ -3563,6 +3573,24 @@ bool Document::canRemovePageAnnotation(const Annotation *annotation) const
     }
 }
 
+void Document::setAnnotationHiddenInView(int page, Annotation *annotation, bool hidden)
+{
+    if (page < 0 || page >= d->m_pagesVector.size() || !d->m_pagesVector.at(page)->annotations().contains(annotation)) return;
+    if (annotation->isHiddenInView() == hidden) return;
+    AnnotationPrivate::get(annotation)->m_hiddenInView.store(hidden, std::memory_order_relaxed);
+    d->refreshPixmaps(page);
+    foreachObserver(notifyPageChanged(page, DocumentObserver::Annotations));
+}
+
+void Document::setTransientHighlight(int id, int page, const RegularAreaRect &area, const QColor &color)
+{
+    for (int p = 0; p < d->m_pagesVector.size(); ++p) {
+        d->m_pagesVector.at(p)->d->deleteHighlights(id);
+        if (p == page && !area.isEmpty()) d->m_pagesVector.at(p)->d->setHighlight(area, color, id);
+        foreachObserver(notifyPageChanged(p, DocumentObserver::Highlights));
+    }
+}
+
 void Document::removePageAnnotation(int page, Annotation *annotation)
 {
     QUndoCommand *uc = new RemoveAnnotationCommand(this->d, annotation, page);
@@ -3571,9 +3599,14 @@ void Document::removePageAnnotation(int page, Annotation *annotation)
 
 void Document::removePageAnnotations(int page, const QList<Annotation *> &annotations)
 {
+    removePageAnnotations(page, annotations, true);
+}
+
+void Document::removePageAnnotations(int page, const QList<Annotation *> &annotations, bool moveViewport)
+{
     d->m_undoStack->beginMacro(i18nc("remove a collection of annotations from the page", "remove annotations"));
     for (Annotation *annotation : annotations) {
-        QUndoCommand *uc = new RemoveAnnotationCommand(this->d, annotation, page);
+        QUndoCommand *uc = new RemoveAnnotationCommand(this->d, annotation, page, moveViewport);
         d->m_undoStack->push(uc);
     }
     d->m_undoStack->endMacro();
@@ -4954,19 +4987,25 @@ bool Document::swapBackingFile(const QString &newFileName, const QUrl &url)
                 return false;
             }
 
-            // Update the undo stack contents
+            // Annotation removal can group commands in QUndoStack macros. Refresh
+            // every leaf, retaining the macro so save does not break undo/redo.
+            QList<QUndoCommand *> commands;
             for (int i = 0; i < d->m_undoStack->count(); ++i) {
-                // Trust me on the const_cast ^_^
-                QUndoCommand *uc = const_cast<QUndoCommand *>(d->m_undoStack->command(i));
-                if (OkularUndoCommand *ouc = dynamic_cast<OkularUndoCommand *>(uc)) {
-                    const bool success = ouc->refreshInternalPageReferences(newPagesVector);
-                    if (!success) {
-                        qWarning() << "Document::swapBackingFile: refreshInternalPageReferences failed" << ouc;
+                commands.append(const_cast<QUndoCommand *>(d->m_undoStack->command(i)));
+            }
+            while (!commands.isEmpty()) {
+                QUndoCommand *command = commands.takeFirst();
+                if (auto *okularCommand = dynamic_cast<OkularUndoCommand *>(command)) {
+                    if (!okularCommand->refreshInternalPageReferences(newPagesVector)) {
+                        qWarning() << "Document::swapBackingFile: refreshInternalPageReferences failed" << okularCommand;
                         return false;
                     }
-                } else {
-                    qWarning() << "Document::swapBackingFile: Unhandled undo command" << uc;
+                } else if (command->childCount() == 0) {
+                    qWarning() << "Document::swapBackingFile: Unhandled undo command" << command;
                     return false;
+                }
+                for (int child = command->childCount() - 1; child >= 0; --child) {
+                    commands.prepend(const_cast<QUndoCommand *>(command->child(child)));
                 }
             }
 

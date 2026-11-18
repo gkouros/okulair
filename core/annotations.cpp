@@ -656,6 +656,11 @@ void Annotation::setFlags(int flags)
     d->m_flags = flags;
 }
 
+bool Annotation::isHiddenInView() const
+{
+    return d_ptr->m_hiddenInView.load(std::memory_order_relaxed);
+}
+
 int Annotation::flags() const
 {
     Q_D(const Annotation);

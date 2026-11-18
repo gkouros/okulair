@@ -8,6 +8,7 @@
 #define OKULAR_ANNOTATIONS_P_H
 
 #include "annotations.h"
+#include <atomic>
 #include "area.h"
 
 // qt/kde includes
@@ -66,6 +67,7 @@ public:
     QDateTime m_creationDate;
 
     int m_flags;
+    std::atomic_bool m_hiddenInView{false};
     NormalizedRect m_boundary;
     NormalizedRect m_transformedBoundary;
 

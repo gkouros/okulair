@@ -173,7 +173,7 @@ void PagePainter::paintCroppedPageOnPainter(QPainter *destPainter,
                 const int annFlags = ann->flags();
                 const Okular::NormalizedRect boundary = ann->transformedBoundingRectangle();
 
-                if (annFlags & Okular::Annotation::Hidden) {
+                if ((annFlags & Okular::Annotation::Hidden) || ann->isHiddenInView()) {
                     continue;
                 }
 
@@ -322,37 +322,26 @@ void PagePainter::paintCroppedPageOnPainter(QPainter *destPainter,
         // 4B.3. highlight rects in page
         // draw highlights that are inside the 'limits' paint region
         for (const auto &highlight : std::as_const(bufferedHighlights)) {
-            // CompositionMode_Multiply still looks good on white bg so
-            // change nothing if render colors are not changed
-            QPainter::CompositionMode compMode = QPainter::CompositionMode_Multiply;
-            QColor frameColor = highlight.first.darker(150);
-            if (Okular::SettingsCore::changeColors()) {
-                switch (Okular::SettingsCore::renderMode()) {
-                case Okular::SettingsCore::EnumRenderMode::Paper:
-                    compMode = QPainter::CompositionMode_Difference;
-                    break;
-                case Okular::SettingsCore::EnumRenderMode::Inverted: // fall through
-                case Okular::SettingsCore::EnumRenderMode::Recolor:
-                    // CompositionMode_Multiply makes highlights invisible when background
-                    // color is close to dark
-                    compMode = QPainter::CompositionMode_Difference;
-                    frameColor.setRgb((frameColor.red() - 255) * -1, (frameColor.green() - 255) * -1, (frameColor.blue() - 255) * -1);
-                    break;
-                }
-            }
-
             const Okular::NormalizedRect &r = highlight.second;
             // find out the rect to highlight on pixmap
             QRect highlightRect = r.geometry(scaledWidth, scaledHeight).translated(-scaledCrop.topLeft()).intersected(limits);
             highlightRect.translate(-limits.left(), -limits.top());
 
-            const QColor highlightColor = highlight.first;
+            if (highlightRect.isEmpty()) continue;
+            int luminance = 0, samples = 0;
+            for (int y = 1; y <= 3; ++y) for (int x = 1; x <= 3; ++x) {
+                const auto point = QPoint(highlightRect.left() + (highlightRect.width() - 1) * x / 4, highlightRect.top() + (highlightRect.height() - 1) * y / 4);
+                if (backImage.rect().contains(point)) { luminance += qGray(backImage.pixel(point)); ++samples; }
+            }
+            const bool dark = samples && luminance / samples < 128;
+            QColor highlightColor = highlight.first;
+            if (dark) highlightColor.setAlpha(75);
             QPainter painter(&backImage);
-            painter.setCompositionMode(compMode);
+            painter.setCompositionMode(dark ? QPainter::CompositionMode_Screen : QPainter::CompositionMode_Multiply);
             painter.fillRect(highlightRect, highlightColor);
-
             const QRect frameRect = r.geometry(scaledWidth, scaledHeight).translated(-scaledCrop.topLeft()).translated(-limits.left(), -limits.top());
-            painter.setPen(frameColor);
+            painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            painter.setPen(dark ? highlight.first.lighter(120) : highlight.first.darker(150));
             painter.drawRect(frameRect);
         }
 

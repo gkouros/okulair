@@ -433,6 +433,7 @@ QRect AnnotationObjectRect::boundingRect(double xScale, double yScale) const
 
 bool AnnotationObjectRect::contains(double x, double y, double xScale, double yScale) const
 {
+    if (static_cast<const Annotation *>(m_object)->isHiddenInView()) return false;
     return boundingRect(xScale, yScale).contains((int)(x * xScale), (int)(y * yScale), false);
 }
 

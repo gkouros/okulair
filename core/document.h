@@ -514,6 +514,11 @@ public:
      * Adds a new @p annotation to the given @p page.
      */
     void addPageAnnotation(int page, Annotation *annotation);
+    /** Add an annotation, optionally preserving the viewport during redo/undo.
+     * Background metadata writes should pass false; ordinary edits navigate.
+     * OkulAIr extension, 2026-11-17.
+     */
+    void addPageAnnotation(int page, Annotation *annotation, bool moveViewport);
 
     /**
      * Tests if the @p annotation can be modified
@@ -575,6 +580,10 @@ public:
      * @since 0.17 (KDE 4.11)
      */
     void editPageAnnotationContents(int page, Annotation *annotation, const QString &newContents, int newCursorPos, int prevCursorPos, int prevAnchorPos);
+    /** Edit background annotation contents without navigating when moveViewport is false.
+     * The choice also applies to undo/redo. OkulAIr extension, 2026-11-17.
+     */
+    void editPageAnnotationContents(int page, Annotation *annotation, const QString &newContents, int newCursorPos, int prevCursorPos, int prevAnchorPos, bool moveViewport);
 
     /**
      * Tests if the @p annotation can be removed
@@ -587,11 +596,17 @@ public:
      * Removes the given @p annotation from the given @p page.
      */
     void removePageAnnotation(int page, Annotation *annotation);
+    /** Filter an annotation in this viewer without changing its PDF flags. */
+    void setAnnotationHiddenInView(int page, Annotation *annotation, bool hidden);
+    /** Brief evidence highlight, independent of text selection and search. */
+    void setTransientHighlight(int id, int page, const RegularAreaRect &area, const QColor &color);
 
     /**
      * Removes the given @p annotations from the given @p page.
      */
     void removePageAnnotations(int page, const QList<Annotation *> &annotations);
+    /** Remove background annotations without navigating the document view. */
+    void removePageAnnotations(int page, const QList<Annotation *> &annotations, bool moveViewport);
 
     /**
      * Clears the text selection highlights for the given @p page,
