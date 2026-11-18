@@ -143,6 +143,12 @@ else()
 endif()
 
 if (BUILD_DESKTOP)
+    # OkulAIr modification, 2026-11-17: optional experimental AI sidebar.
+    option(OKULAIR_AI "Build the experimental OkulAIr AI assistant" ON)
+    if (OKULAIR_AI)
+        find_package(Qt6 ${QT_REQUIRED_VERSION} CONFIG REQUIRED COMPONENTS Network)
+        find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
+    endif()
     # shall we use DBus?
     # enabled per default on Linux & BSD systems
     set(USE_DBUS_DEFAULT OFF)
@@ -569,6 +575,15 @@ endif()
 kconfig_add_kcfg_files(okularpart_SRCS GENERATE_MOC conf/settings.kcfgc)
 
 add_library(okularpart SHARED ${okularpart_SRCS})
+if (OKULAIR_AI)
+    target_sources(okularpart PRIVATE
+        part/ai/session.cpp
+        part/ai/sessionstore.cpp
+        part/ai/provider.cpp
+        part/ai/chatgptauth.cpp
+    )
+    target_link_libraries(okularpart Qt6::Network OpenSSL::Crypto)
+endif()
 generate_export_header(okularpart BASE_NAME okularpart)
 
 target_link_libraries(okularpart okularcore

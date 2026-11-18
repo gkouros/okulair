@@ -20,6 +20,24 @@ endmacro ()
 
 add_conf_unittest(editdrawingtooldialogtest.cpp)
 
+# OkulAIr modification, 2026-11-17: isolated AI protocol, PDF, and UI tests.
+if(BUILD_DESKTOP AND OKULAIR_AI)
+    ecm_add_test(chatgptauthtest.cpp ../part/ai/chatgptauth.cpp ../part/ai/provider.cpp
+        TEST_NAME "chatgptauthtest"
+        LINK_LIBRARIES Qt6::Widgets Qt6::Test Qt6::Network OpenSSL::Crypto
+    )
+    ecm_add_test(aisessiontest.cpp ../part/ai/session.cpp ../part/ai/provider.cpp
+        TEST_NAME "aisessiontest"
+        LINK_LIBRARIES Qt6::Test Qt6::Network
+    )
+    if(Poppler_Qt6_FOUND)
+        ecm_add_test(aisessionstoretest.cpp ../part/ai/session.cpp ../part/ai/sessionstore.cpp
+            TEST_NAME "aisessionstoretest"
+            LINK_LIBRARIES Qt6::Widgets Qt6::Test okularcore
+        )
+    endif()
+endif()
+
 ecm_add_test(shelltest.cpp ../shell/shellutils.cpp
     TEST_NAME "shelltest"
     LINK_LIBRARIES Qt6::Test okularcore
