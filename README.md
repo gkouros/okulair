@@ -77,34 +77,51 @@ There are no OkulAIr binary releases documented here yet. Downloads from the
 [Okular website](https://okular.kde.org/download.php) are upstream Okular, without
 the planned OkulAIr AI features.
 
-## Building this checkout
+## Building and installing
 
-The inherited build requires CMake 3.22+, Qt 6.8+, KDE Frameworks 6.13+, and the
-document-backend dependencies selected by CMake. See the
-[KDE development guide](https://community.kde.org/Get_Involved/development) for
-environment setup and the [upstream build notes](README.upstream.md).
+The desktop build requires CMake 3.22+, Qt 6.8+, KDE Frameworks 6.13+, and
+Poppler 25.03+ for PDF support. Your distribution must provide these versions.
+
+On Ubuntu/Debian, clone the checkout and run the installer:
 
 ```bash
 git clone https://github.com/gkouros/okulair.git
 cd okulair
-cmake -S . -B build -DCMAKE_INSTALL_PREFIX="$HOME/.local/opt/okulair" -DOKULAR_UI=desktop
-cmake --build build --parallel
-cmake --install build
+./scripts/install-okulair.sh --install-deps
 ```
 
-Use a separate installation prefix: this checkout still installs upstream-named
-executables, plugins, and resources. If needed, source the generated
-`build/prefix.sh` to select this build's runtime environment. The executable is
-currently `okular`; renaming it to `okulair` is future integration work.
+`--install-deps` uses apt and sudo to install build dependencies. Omit that flag
+if dependencies are already installed. Run the script as your normal user; only
+the dependency installation needs sudo.
 
-The inherited tests can be run after installation:
+The script builds a Release version with AI and PDF support in `build-install/`
+and installs into `~/.local/opt/okulair`. Handbook generation is disabled to avoid
+requiring KDE DocTools translation data. Launch the installed application with:
 
 ```bash
-ctest --test-dir build --output-on-failure
+"$HOME/.local/opt/okulair/bin/okulair" /path/to/paper.pdf
 ```
 
-The UI choices are `desktop`, `mobile`, and `both`. Source formatting follows
-[README.clang-format](README.clang-format).
+The `okulair` launcher sets runtime paths and starts a separate D-Bus session so
+PDFs are not forwarded to an already running system Okular. The underlying
+executable, plugins, and resources still use upstream names; keep a separate
+installation prefix.
+
+To rebuild and update the installation after changing or updating the source:
+
+```bash
+./scripts/install-okulair.sh
+```
+
+Use `--prefix PATH`, `--build-dir PATH`, or `--jobs N` to customize the install
+location, build directory, or parallelism (default: 4 jobs). Choose a writable
+installation prefix. Run `./scripts/install-okulair.sh --help` for all options.
+
+For manual CMake builds, the development launcher, and tests, see
+[development instructions](docs/development.md). The installer disables tests;
+use the documented development configuration to build and run them. See also the
+[upstream build notes](README.upstream.md) and
+[formatting instructions](README.clang-format).
 
 ## Contributing
 
