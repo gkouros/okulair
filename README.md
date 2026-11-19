@@ -5,7 +5,7 @@ Fork README introduced 2026-11-17. Original preserved in README.upstream.md.
 -->
 
 <p align="center">
-  <img src="docs/branding/okulair-banner.png" alt="OkulAIr — A new lens on your documents. A document viewed through a teal lens." width="840">
+  <img src="docs/branding/okulair-banner.png" alt="OkulAIr — A new lens on your documents. A document viewed through a teal magnifying glass with sparkles." width="840">
 </p>
 
 # OkulAIr
@@ -143,8 +143,7 @@ Read [LICENSE.md](LICENSE.md) for the licensing summary and distribution guidanc
 existing collected license texts, and [NOTICE](NOTICE) for fork attribution.
 The software is provided without warranty, subject to the applicable licenses.
 
-The new [OkulAIr artwork](docs/branding/README.md) uses original vector shapes,
-not the KDE logo or an adapted upstream Okular icon. Software license permissions
+The [OkulAIr artwork](docs/branding/README.md) uses a document and magnifying-glass design. Software license permissions
 do not by themselves grant trademark rights or imply endorsement.
 
 Requests appear below the chat toolbar with an **×** to cancel each running or
