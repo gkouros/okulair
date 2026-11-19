@@ -4,6 +4,8 @@
 */
 #pragma once
 #include <QJsonArray>
+#include <QJsonObject>
+#include <QStringList>
 #include <QNetworkAccessManager>
 #include <QObject>
 #include <QPointer>
@@ -20,6 +22,8 @@ struct Connection {
     QString model;
     QString key;
     bool requiresKey = false;
+    QString effort = {}; // Empty uses the provider default.
+    QJsonObject modelMetadata = {};
 };
 
 // Stateful SSE decoding is separate from the network so framing can be tested.
@@ -46,6 +50,8 @@ public:
     ~Provider() override;
     static bool accountClient(Protocol protocol);
     static QString accountExecutable(Protocol protocol);
+    static QStringList effortOptions(const Connection &connection);
+    static QString defaultEffort(const Connection &connection);
     static QString validate(const Connection &connection);
     static QJsonObject requestBody(const Connection &connection, const QString &instructions, const QJsonArray &history, const QByteArray &image = {});
     void start(const Connection &connection, const QString &instructions, const QJsonArray &history, const QByteArray &image = {});

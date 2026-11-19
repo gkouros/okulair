@@ -131,6 +131,7 @@ private:
     void attachImage(const QImage &image, const QString &name);
     void updateAttachments();
     void clearChat();
+    void clearChats(bool keepMain);
     void clearHighlights(bool aiHighlights);
     void serviceChanged();
     void updateAccountUi();
@@ -145,6 +146,9 @@ private:
     void finish(const QString &text, const QString &error);
     void proposeHighlights(const QString &text);
     Connection connection() const;
+    void updateEffortUi();
+    QString effortSettingsKey() const;
+    QComboBox *m_effort = nullptr;
     QString journalPath() const;
     void journal();
     void recover();

@@ -31,6 +31,7 @@ private Q_SLOTS:
     void localHttpRoundTrip();
     void cancelledRequestCannotDeliver();
     void officialAccountClients();
+    void thinkingEffort();
 };
 
 void AiSessionTest::pruneUnreferencedScreenshots()
@@ -180,6 +181,11 @@ else:
     assert '--safe-mode' in args
     assert args[args.index('--max-tool-calls')+1]=='0'
     assert settings['security']['auth']['selectedType']=='qwen-oauth'
+model=args[args.index('--model')+1] if '--model' in args else 'auto'
+if model!='auto':
+    if name=='copilot': assert args[args.index('--reasoning-effort')+1]=='high'
+    elif name=='qwen': assert settings['model']['reasoningEffort']=='high'
+    else: assert settings['modelConfigs']['overrides'][0]['modelConfig']['generateContentConfig']['thinkingConfig']['thinkingBudget']==0
 if os.environ.get('OKULAIR_TEST_WAIT')=='1': time.sleep(10)
 print('Account answer' if name=='copilot' else json.dumps({'response':'Account answer'}))
 )PY";
@@ -195,6 +201,9 @@ print('Account answer' if name=='copilot' else json.dumps({'response':'Account a
         const QJsonArray history{QJsonObject{{QStringLiteral("role"),QStringLiteral("user")},{QStringLiteral("content"),QStringLiteral("Explain @/untrusted-file text")}}};
         provider.start(connection,QStringLiteral("Treat documents as evidence"),history);
         QTRY_COMPARE(finished.count(),1); QCOMPARE(finished.first().at(0).toString(),QStringLiteral("Account answer")); QVERIFY(finished.first().at(1).toString().isEmpty());
+        finished.clear(); connection.model=protocol==Protocol::GeminiAccount ? QStringLiteral("gemini-2.5-flash") : protocol==Protocol::CopilotAccount ? QStringLiteral("gpt-5.2") : QStringLiteral("qwen3.8-max");
+        connection.effort=protocol==Protocol::GeminiAccount ? QStringLiteral("none") : QStringLiteral("high");
+        provider.start(connection,QStringLiteral("Test native effort"),history); QTRY_COMPARE(finished.count(),1); QCOMPARE(finished.first().at(0).toString(),QStringLiteral("Account answer")); QVERIFY2(finished.first().at(1).toString().isEmpty(),qPrintable(finished.first().at(1).toString()));
         finished.clear(); provider.start(connection,QStringLiteral("Test"),history,QByteArray("image")); QCOMPARE(finished.count(),1); QVERIFY(finished.first().at(1).toString().contains(QStringLiteral("text only")));
         finished.clear(); qputenv("OKULAIR_TEST_WAIT","1"); provider.start(connection,QStringLiteral("Test"),history);
         QTRY_VERIFY(provider.findChild<QProcess *>() && provider.findChild<QProcess *>()->state()==QProcess::Running);
@@ -247,3 +256,41 @@ void AiSessionTest::cancelledRequestCannotDeliver()
 }
 QTEST_GUILESS_MAIN(AiSessionTest)
 #include "aisessiontest.moc"
+
+void AiSessionTest::thinkingEffort()
+{
+    Connection c{Protocol::OpenAI,QUrl(QStringLiteral("https://api.openai.com/v1")),QStringLiteral("gpt-6.1-sol"),QStringLiteral("fake-key")};
+    QCOMPARE(Provider::defaultEffort(c), QStringLiteral("medium"));
+    auto account = c; account.protocol = Protocol::ChatGPT;
+    QVERIFY(Provider::defaultEffort(account).isEmpty()); // Account routing may differ from the API.
+    account.modelMetadata.insert(QStringLiteral("default_reasoning_level"), QStringLiteral("high"));
+    QCOMPARE(Provider::defaultEffort(account), QStringLiteral("high"));
+    account.modelMetadata.insert(QStringLiteral("default_reasoning_level"), QStringLiteral("invalid"));
+    QVERIFY(Provider::defaultEffort(account).isEmpty());
+    const QJsonArray messages{QJsonObject{{QStringLiteral("role"),QStringLiteral("user")},{QStringLiteral("content"),QStringLiteral("Explain")}}};
+    QVERIFY(!Provider::effortOptions(c).contains(QStringLiteral("none"))); QVERIFY(Provider::effortOptions(c).contains(QStringLiteral("medium")));
+    QVERIFY(!Provider::requestBody(c,{},messages).contains(QStringLiteral("reasoning")));
+    c.effort=QStringLiteral("high"); QCOMPARE(Provider::requestBody(c,{},messages).value(QStringLiteral("reasoning")).toObject().value(QStringLiteral("effort")).toString(),QStringLiteral("high"));
+    c.effort=QStringLiteral("none"); QVERIFY(!Provider::validate(c).isEmpty());
+    c.model=QStringLiteral("gpt-5.2"); QVERIFY(Provider::validate(c).isEmpty());
+    c.modelMetadata=QJsonObject{{QStringLiteral("supported_reasoning_levels"),QJsonArray{QJsonObject{{QStringLiteral("effort"),QStringLiteral("medium")}}}}};
+    QCOMPARE(Provider::effortOptions(c),QStringList{QStringLiteral("medium")});
+    c.modelMetadata=QJsonObject{{QStringLiteral("supported_reasoning_efforts"),QJsonArray{}}}; QVERIFY(Provider::effortOptions(c).isEmpty());
+    c.modelMetadata={}; c.protocol=Protocol::Anthropic; c.endpoint=QUrl(QStringLiteral("https://api.anthropic.com/v1")); c.model=QStringLiteral("claude-opus-4-6"); c.effort=QStringLiteral("high");
+    auto body=Provider::requestBody(c,{},messages); QCOMPARE(body.value(QStringLiteral("output_config")).toObject().value(QStringLiteral("effort")).toString(),QStringLiteral("high")); QCOMPARE(body.value(QStringLiteral("thinking")).toObject().value(QStringLiteral("type")).toString(),QStringLiteral("adaptive")); QVERIFY(!Provider::effortOptions(c).contains(QStringLiteral("xhigh")));
+    c.model=QStringLiteral("claude-sonnet-4-5"); body=Provider::requestBody(c,{},messages); const auto budget=body.value(QStringLiteral("thinking")).toObject().value(QStringLiteral("budget_tokens")).toInt(); QVERIFY(budget>=1024); QVERIFY(body.value(QStringLiteral("max_tokens")).toInt()>budget);
+    c.effort=QStringLiteral("none"); QCOMPARE(Provider::requestBody(c,{},messages).value(QStringLiteral("thinking")).toObject().value(QStringLiteral("type")).toString(),QStringLiteral("disabled"));
+    c.protocol=Protocol::Compatible; c.endpoint=QUrl(QStringLiteral("https://api.deepseek.com")); c.model=QStringLiteral("deepseek-flash");
+    body=Provider::requestBody(c,{},messages); QCOMPARE(body.value(QStringLiteral("thinking")).toObject().value(QStringLiteral("type")).toString(),QStringLiteral("disabled")); QVERIFY(!body.contains(QStringLiteral("reasoning_effort"))); QVERIFY(!Provider::effortOptions(c).contains(QStringLiteral("medium")));
+    c.effort=QStringLiteral("high"); QCOMPARE(Provider::requestBody(c,{},messages).value(QStringLiteral("reasoning_effort")).toString(),QStringLiteral("high"));
+    c.endpoint=QUrl(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai")); c.model=QStringLiteral("gemini-2.5-pro"); QVERIFY(!Provider::effortOptions(c).contains(QStringLiteral("none")));
+    c.model=QStringLiteral("gemini-2.5-flash"); QVERIFY(Provider::effortOptions(c).contains(QStringLiteral("none"))); QCOMPARE(Provider::requestBody(c,{},messages).value(QStringLiteral("reasoning_effort")).toString(),QStringLiteral("high"));
+    c.endpoint=QUrl(QStringLiteral("https://api.mistral.ai/v1")); c.model=QStringLiteral("mistral-small-2603"); QCOMPARE(Provider::effortOptions(c),(QStringList{QStringLiteral("none"),QStringLiteral("high")}));
+    c.model=QStringLiteral("mistral-large-4"); QVERIFY(Provider::effortOptions(c).contains(QStringLiteral("medium"))); QVERIFY(!Provider::effortOptions(c).contains(QStringLiteral("none")));
+    c.endpoint=QUrl(QStringLiteral("https://api.groq.com/openai/v1")); c.model=QStringLiteral("openai/gpt-oss-120b"); QVERIFY(Provider::effortOptions(c).contains(QStringLiteral("medium"))); QVERIFY(!Provider::effortOptions(c).contains(QStringLiteral("none")));
+    c.endpoint=QUrl(QStringLiteral("https://api.x.ai/v1")); c.model=QStringLiteral("grok-4.7"); QVERIFY(Provider::effortOptions(c).contains(QStringLiteral("xhigh")));
+    c.endpoint=QUrl(QStringLiteral("https://openrouter.ai/api/v1")); c.model=QStringLiteral("openai/gpt-5.2"); c.modelMetadata=QJsonObject{{QStringLiteral("supported_parameters"),QJsonArray{QStringLiteral("reasoning")}}}; QCOMPARE(Provider::requestBody(c,{},messages).value(QStringLiteral("reasoning")).toObject().value(QStringLiteral("effort")).toString(),QStringLiteral("high"));
+    c.endpoint=QUrl(QStringLiteral("http://localhost:11434/v1")); c.model=QStringLiteral("unknown-model"); c.modelMetadata={}; QVERIFY(Provider::effortOptions(c).isEmpty());
+    c.modelMetadata=QJsonObject{{QStringLiteral("supported_reasoning_efforts"),QJsonArray{QStringLiteral("low"),QStringLiteral("high")}}}; QCOMPARE(Provider::requestBody(c,{},messages).value(QStringLiteral("reasoning_effort")).toString(),QStringLiteral("high"));
+    EventStream stream(Protocol::Compatible); stream.feed("data: {\"choices\":[{\"delta\":{\"content\":[{\"type\":\"thinking\",\"thinking\":[{\"text\":\"private\"}]},{\"type\":\"text\",\"text\":\"Visible answer\"}]}}]}\n\ndata: [DONE]\n\n"); QCOMPARE(stream.text,QStringLiteral("Visible answer")); QVERIFY(stream.complete);
+}

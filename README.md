@@ -41,6 +41,7 @@ acceptance gates.
 | --- | --- |
 | Ask about a document | A movable chat dock with separate message cards, controllable streaming scroll, and Document / Selection / View icon buttons; sharing approval remembered per PDF and service |
 | Choose a provider | ChatGPT browser sign-in; presets for OpenAI, Claude, DeepSeek, Gemini, Groq, Mistral, OpenRouter, Grok, and local servers; model discovery |
+| Choose thinking effort | Model-aware native effort or thinking-budget settings; per-model preferences; Default for unverified capabilities |
 | Guide your reading | Light / Balanced / Detailed cues: editable categories and colors; page-by-page background application, category filters and targeted regeneration; optional explanations for manual highlights |
 | Organize your reading | Ordinary named chat tabs; double-click to rename; ask about selected text or figures; close and restore chats without losing content |
 | Follow evidence | Exact supporting quotes become links to briefly outlined source passages; selection actions explain, define, unpack equations or critique in the current/new tab |

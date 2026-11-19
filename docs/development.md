@@ -325,8 +325,8 @@ Textual claims are requested with citations of the form
 `[p. N | short exact supporting quote]`. The UI validates the quote against the
 physical page; only a unique exact match becomes an **evidence** link. Clicking
 it centers and briefly outlines/highlights the exact text independently of the
-reader's text selection and normal search. An unmatched/ambiguous quote is marked
-**quote not located**. Plain `[p. N]` references remain page links and are not
+reader's text selection and normal search. An unmatched/ambiguous quote falls back to a normal page link, whose tooltip
+explains that the exact passage was not verified. Plain `[p. N]` references remain page links and are not
 presented as exact evidence. Quote-location verification does not prove that the
 quote supports the model's interpretation. Figures without extractable text use
 page references instead of pretending to provide a textual quote anchor.
@@ -467,3 +467,63 @@ inserts only new text into that card. Rounded-card painting clears the damaged
 viewport background first, preventing old glyphs from showing through during
 scrolling and layout changes. Reader-controlled scrolling remains independent of
 streaming updates.
+
+
+## Model thinking effort
+
+AI connection settings include **Thinking effort**, saved per protocol, endpoint
+and model. **Default** omits the override. Its label includes the effort when
+the model catalogue reports a supported default, or a documented OpenAI API
+profile supplies it. Account and native-client defaults are not inferred from
+API defaults. The picker prefers explicit supported
+effort metadata returned by the model catalogue (including ChatGPT and DeepSeek
+catalogues), then uses conservative profiles for documented model IDs. Manually
+typed unknown models and clients using an unknown `auto` model remain on Default;
+model names alone do not imply reasoning support on arbitrary custom endpoints.
+
+| Connection | Native control |
+| --- | --- |
+| OpenAI API / ChatGPT | Responses `reasoning.effort`; Instant only where `none` is supported |
+| Claude API, adaptive models | `output_config.effort` and adaptive thinking; no invented Instant option |
+| Claude API, older extended-thinking models | Disabled thinking, or 4,096 / 8,192-token thinking budgets; output budget leaves room for the answer |
+| DeepSeek | `thinking.type` toggle plus the model's supported `reasoning_effort` levels |
+| Gemini API compatibility endpoint | `reasoning_effort`, with model-specific levels and off support |
+| Groq / Mistral / Grok | Model-specific `reasoning_effort`; unsupported variants use Default |
+| OpenRouter | `reasoning.effort` only when its catalogue advertises reasoning support |
+| Custom compatible server | Explicit advertised effort levels, sent as `reasoning_effort` |
+| Gemini official CLI | Private per-request `modelConfigs` override: thinking level or 2.5 thinking budget |
+| Copilot official CLI | `--reasoning-effort` for recognized reasoning models |
+| Qwen official CLI | Private `model.reasoningEffort` for newer Qwen families with native effort controls |
+
+Queue entries and running highlight jobs capture the effort at submission; later
+UI changes do not alter those jobs. Submitted prompts and answers retain the chosen
+explicit effort in PDF conversation metadata. No hidden reasoning is added to the
+chat. Compatible streaming text-chunk arrays retain visible text and skip thinking
+chunks. Non-default reasoning requests get a longer timeout, while Stop and each
+request's cancel button remain available. Higher effort can increase latency,
+subscription allowance usage or API charges. Levels are provider controls and do
+not promise the same computation or quality across models. Live paid-provider
+calls are not part of the regression tests.
+
+Adapter references (checked November 19, 2026):
+[OpenAI reasoning](https://developers.openai.com/api/docs/guides/reasoning),
+[Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+[Claude extended thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking),
+[DeepSeek thinking](https://api-docs.deepseek.com/guides/thinking_mode/),
+[Gemini compatibility](https://ai.google.dev/gemini-api/docs/openai),
+[Groq reasoning](https://console.groq.com/docs/reasoning),
+[Mistral reasoning](https://docs.mistral.ai/inference/conversations/reasoning),
+[Grok reasoning](https://docs.x.ai/docs/guides/reasoning),
+[OpenRouter reasoning](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens),
+[Gemini CLI generation settings](https://geminicli.com/docs/cli/generation-settings/),
+[Copilot CLI flags](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference),
+[Qwen provider settings](https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/model-providers.md).
+
+
+Bulk chat cleanup: **Delete other chats** removes open and closed chats except
+Main chat, retaining its history and draft. **Clear chat** removes all other
+chats and clears Main chat. Both update the PDF conversation immediately and
+support Ctrl+Z; Ctrl+S writes the change to disk. Removing a draft attachment
+also updates the saved workspace immediately, so it cannot reappear after a
+save/reopen cycle. Images already submitted in chat history remain with those
+messages until their chat is cleared or deleted.

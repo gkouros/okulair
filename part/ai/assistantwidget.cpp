@@ -168,6 +168,15 @@ AssistantWidget::AssistantWidget(Okular::Document *document, QWidget *parent)
     form->addRow(i18n("Provider:"), m_protocol);
     form->addRow(i18n("Base URL:"), m_endpoint);
     form->addRow(i18n("Model:"), m_modelPicker);
+    m_effort = new QComboBox(m_settings); m_effort->setObjectName(QStringLiteral("aiThinkingEffort"));
+    m_effort->addItem(i18n("Default"),QString());
+    form->addRow(i18n("Thinking effort:"),m_effort);
+    connect(m_modelPicker,&QComboBox::currentTextChanged,this,[this] { updateEffortUi(); });
+    connect(m_modelPicker,&QComboBox::currentIndexChanged,this,[this] { updateEffortUi(); });
+    connect(m_effort,&QComboBox::activated,this,[this] {
+        KConfigGroup settings(KSharedConfig::openConfig(),QStringLiteral("OkulAIrThinking"));
+        settings.writeEntry(effortSettingsKey(),m_effort->currentData().toString()); settings.sync();
+    });
     form->addRow(i18n("API key:"), m_key);
     m_accounts = new QComboBox(this);
     m_accounts->setObjectName(QStringLiteral("aiAccounts"));
@@ -213,7 +222,13 @@ AssistantWidget::AssistantWidget(Okular::Document *document, QWidget *parent)
     m_clearHighlights = new QPushButton(i18n("Clear AI highlights"), m_settings);
     m_clearHighlights->setObjectName(QStringLiteral("aiClearHighlights"));
     m_clearHighlights->setToolTip(i18n("Remove AI-generated highlights from this PDF. Your own highlights are preserved."));
+    m_clearChat->setToolTip(i18n("Delete every other chat and clear Main chat. Ctrl+Z undoes the change."));
     settingsLayout->addWidget(m_clearChat);
+    auto *deleteChats = new QPushButton(i18n("Delete other chats"), m_settings);
+    deleteChats->setObjectName(QStringLiteral("aiDeleteOtherChats"));
+    deleteChats->setToolTip(i18n("Delete all other chats, including closed chats. Keep Main chat and its contents."));
+    settingsLayout->addWidget(deleteChats);
+    connect(deleteChats, &QPushButton::clicked, this, [this] { clearChats(true); });
     settingsLayout->addWidget(m_clearHighlights);
     m_clearUserHighlights = new QPushButton(i18n("Clear user highlights"), m_settings);
     m_clearUserHighlights->setObjectName(QStringLiteral("aiClearUserHighlights"));
@@ -228,6 +243,7 @@ AssistantWidget::AssistantWidget(Okular::Document *document, QWidget *parent)
     connect(m_protocol, &QComboBox::currentIndexChanged, this, &AssistantWidget::serviceChanged);
     connect(m_endpoint, &QLineEdit::textChanged, this, [this] {
         m_key->clear();
+        updateEffortUi();
         if (!m_busy) m_provider.cancel();
         m_resetSharing->setEnabled(!m_busy && hasSharingPermission());
     });
@@ -284,8 +300,10 @@ AssistantWidget::AssistantWidget(Okular::Document *document, QWidget *parent)
         for (const auto &entry : models) {
             const auto model = entry.toObject();
             m_modelPicker->addItem(model.value(QStringLiteral("display_name")).toString(model.value(QStringLiteral("slug")).toString()), model.value(QStringLiteral("slug")));
+            m_modelPicker->setItemData(m_modelPicker->count()-1,model,Qt::UserRole+1);
         }
         m_status->setMessageType(KMessageWidget::Positive);
+        updateEffortUi();
         m_status->setText(i18n("ChatGPT connected. Choose a context and ask. Sharing will be confirmed before the first request."));
     });
     connect(&m_provider, &Provider::modelsListed, this, [this](const QJsonArray &models, const QString &error) {
@@ -298,8 +316,10 @@ AssistantWidget::AssistantWidget(Okular::Document *document, QWidget *parent)
             const auto id = model.value(QStringLiteral("id")).toString();
             // API providers need the exact ID, even when their UI names differ.
             m_modelPicker->addItem(id, id);
+            m_modelPicker->setItemData(m_modelPicker->count()-1,model,Qt::UserRole+1);
         }
         m_status->setMessageType(KMessageWidget::Positive);
+        updateEffortUi();
         m_status->setText(i18n("Connected. Choose a model in AI settings."));
     });
     m_scope = new QButtonGroup(this);
@@ -592,9 +612,37 @@ bool AssistantWidget::eventFilter(QObject *watched, QEvent *event)
 
 Connection AssistantWidget::connection() const
 {
-    if (chatGPTSelected()) return {Protocol::ChatGPT, QUrl(QStringLiteral("https://api.openai.com/v1")), m_modelPicker->currentData().toString(), m_auth->accessToken(), false};
-    const auto preset = servicePresets().at(m_protocol->currentIndex());
-    return {preset.protocol, QUrl(m_endpoint->text().trimmed()), m_model->text().trimmed(), m_key->text().trimmed(), preset.requiresKey};
+    const auto preset=servicePresets().at(m_protocol->currentIndex());
+    const bool catalogEntry=m_modelPicker->currentIndex()>=0 && m_modelPicker->currentText()==m_modelPicker->itemText(m_modelPicker->currentIndex());
+    Connection result{preset.protocol,QUrl(m_endpoint->text().trimmed()),m_model->text().trimmed(),m_key->text().trimmed(),preset.requiresKey};
+    if(chatGPTSelected()) { result.endpoint=QUrl(QStringLiteral("https://api.openai.com/v1")); result.model=catalogEntry ? m_modelPicker->currentData().toString() : m_model->text().trimmed(); result.key=m_auth->accessToken(); }
+    if(catalogEntry && result.model==m_modelPicker->currentData().toString()) result.modelMetadata=m_modelPicker->currentData(Qt::UserRole+1).value<QJsonObject>();
+    if(m_effort) result.effort=m_effort->currentData().toString();
+    return result;
+}
+
+QString AssistantWidget::effortSettingsKey() const
+{
+    const auto selected=connection();
+    const QByteArray identity=QByteArray::number(int(selected.protocol))+'\n'+selected.endpoint.toEncoded()+'\n'+selected.model.toUtf8();
+    return QString::fromLatin1(QCryptographicHash::hash(identity,QCryptographicHash::Sha256).toHex());
+}
+
+void AssistantWidget::updateEffortUi()
+{
+    if(!m_effort) return;
+    const auto options=Provider::effortOptions(connection());
+    const KConfigGroup config(KSharedConfig::openConfig(),QStringLiteral("OkulAIrThinking"));
+    const auto preferred=config.readEntry(effortSettingsKey(),QString());
+    const auto defaultEffort = Provider::defaultEffort(connection());
+    const QSignalBlocker blocker(m_effort); m_effort->clear(); m_effort->addItem(defaultEffort.isEmpty() ? i18n("Default") : i18n("Default (%1)", defaultEffort),QString());
+    for(const auto &option:options) {
+        const QString label=option==QLatin1String("none") ? (connection().endpoint.host()==QLatin1String("api.mistral.ai") ? i18n("Minimal thinking") : i18n("Instant (thinking off)")) : option==QLatin1String("minimal") ? i18n("Minimal") : option==QLatin1String("low") ? i18n("Low") : option==QLatin1String("medium") ? i18n("Medium") : option==QLatin1String("high") ? i18n("High") : option==QLatin1String("xhigh") ? i18n("Very high") : i18n("Maximum");
+        m_effort->addItem(label,option);
+    }
+    m_effort->setCurrentIndex(qMax(0,m_effort->findData(preferred)));
+    m_effort->setEnabled(!options.isEmpty());
+    m_effort->setToolTip(options.isEmpty() ? i18n("No verified thinking-effort control for this model or client. The provider's default is used.") : i18n("Native model effort. Higher levels can take longer and use more allowance or billable tokens. Default leaves the choice to the provider. Saved separately for each service and model."));
 }
 
 void AssistantWidget::notifySetup(const QList<Okular::Page *> &, int flags)
@@ -724,6 +772,8 @@ void AssistantWidget::render()
         if (generating) header += i18n(" · Generating…");
         else if (message.value(QStringLiteral("status")) == QLatin1String("interrupted")) header += i18n(" · Incomplete");
         QString detail = context.toHtmlEscaped();
+        const auto effort=message.value(QStringLiteral("reasoningEffort")).toString();
+        if(!effort.isEmpty()) { if(!detail.isEmpty()) detail+=QStringLiteral(" · "); detail+=i18n("Thinking: %1",effort).toHtmlEscaped(); }
         for (const auto &entry : message.value(QStringLiteral("attachments")).toArray()) {
             if (!detail.isEmpty()) detail += QStringLiteral(" · ");
             detail += QStringLiteral("📎 ") + entry.toObject().value(QStringLiteral("name")).toString().toHtmlEscaped();
@@ -909,7 +959,12 @@ void AssistantWidget::updateAttachments()
         remove->setToolTip(attachment.contains(QStringLiteral("image"))
             ? i18n("Image resized for the saved conversation. Sent only when you ask; requires an image-capable model.")
             : i18n("Extracted text only. Sent only when you ask and saved with the conversation."));
-        connect(remove, &QPushButton::clicked, this, [this, i] { if (!m_busy) { m_attachments.removeAt(i); updateAttachments(); } });
+        connect(remove, &QPushButton::clicked, this, [this, i] { if (!m_busy) {
+            const auto old = m_session; const auto attachments = m_attachments;
+            m_attachments.removeAt(i); snapshotWorkspace();
+            if (!persist()) { m_session = old; m_attachments = attachments; }
+            updateAttachments();
+        } });
         layout->addWidget(remove);
     }
     const auto selected = m_session.workspace(m_workspace).value(QStringLiteral("selectionContext")).toObject();
@@ -929,26 +984,39 @@ void AssistantWidget::updateAttachments()
 
 void AssistantWidget::clearChat()
 {
+    clearChats(false);
+}
+
+void AssistantWidget::clearChats(bool keepMain)
+{
     if (m_readOnly || !m_document->pages()) return;
     m_resumeQuestion.clear();
+    m_requests.clear(); refreshRequests();
     stop();
     const auto previous = m_session;
-    m_requests.removeIf([this](const Request &request) { return request.workspace == m_workspace; });
-    refreshRequests();
+    snapshotWorkspace();
+    auto main = m_session.workspace(QStringLiteral("main"));
+    main.insert(QStringLiteral("closed"), false);
     QJsonArray kept;
-    for (const auto &entry : m_session.messages) if (!messageInWorkspace(entry.toObject())) kept.append(entry);
+    if (keepMain) {
+        for (const auto &entry : m_session.messages)
+            if (Session::workspaceOf(entry.toObject()) == QLatin1String("main")) kept.append(entry);
+    } else {
+        main.insert(QStringLiteral("draft"), QString());
+        main.insert(QStringLiteral("attachments"), QJsonArray());
+        main.remove(QStringLiteral("selectionContext"));
+        main.insert(QStringLiteral("scope"), 0);
+    }
     m_session.messages = kept;
-    auto tab = m_session.workspace(m_workspace); tab.insert(QStringLiteral("draft"), QString()); tab.insert(QStringLiteral("attachments"), QJsonArray()); tab.remove(QStringLiteral("selectionContext")); tab.insert(QStringLiteral("scope"), 0); m_session.setWorkspace(tab);
-    if (!persist()) { m_session = previous; render(); return; }
-    m_scope->button(0)->setChecked(true);
-    // Keep the empty recovery snapshot: it supersedes older unsaved history.
-    m_attachments = {}; updateAttachments();
-    m_question->clear();
+    m_session.workspaces = QJsonArray{main};
+    m_session.activeWorkspace = QStringLiteral("main");
+    if (!persist()) { m_session = previous; loadWorkspaceUi(); render(); return; }
     m_partial.clear(); m_renderedPartial.clear();
     m_followOutput = true;
-    render();
+    loadWorkspaceUi(); render();
     m_status->setMessageType(KMessageWidget::Positive);
-    m_status->setText(i18n("Chat cleared. Ctrl+S saves the change; Ctrl+Z restores the previous conversation."));
+    m_status->setText(keepMain ? i18n("Other chats deleted. Main chat retained. Ctrl+S saves the change; Ctrl+Z restores the chats.")
+                              : i18n("All chats deleted and Main chat cleared. Ctrl+S saves the change; Ctrl+Z restores the chats."));
 }
 
 void AssistantWidget::clearHighlights(bool aiHighlights)
@@ -1025,6 +1093,8 @@ void AssistantWidget::start(const QString &question, const QString &kind)
         if (kind == QLatin1String("chat")) m_question->clear();
         return;
     }
+    const auto requestedEffort=m_hasPreparedRequest ? m_preparedRequest.provider.effort : connection().effort;
+    const auto requestedMetadata=m_hasPreparedRequest ? m_preparedRequest.provider.modelMetadata : connection().modelMetadata;
     const QScopedValueRollback<bool> starting(m_startingRequest, true);
     const auto continueQueue = qScopeGuard([this] { if (!m_busy && !m_requests.isEmpty() && !m_queueScheduled) { m_queueScheduled=true; QTimer::singleShot(0,this,[this] { m_queueScheduled=false; runNextRequest(); }); } });
     if (!m_document->pages()) { showError(i18n("Open a PDF before asking a question or generating annotations.")); return; }
@@ -1036,7 +1106,7 @@ void AssistantWidget::start(const QString &question, const QString &kind)
     if (chatGPTSelected() && m_auth->accessToken().isEmpty()) {
         if (!m_auth->hasCredentials()) { showError(i18n("No LLM service is connected. Click Continue with ChatGPT to sign in through your browser.")); return; }
         if (!m_hasPreparedRequest) {
-            m_preparedRequest = {}; m_preparedRequest.question=question; m_preparedRequest.kind=kind; m_preparedRequest.workspace=m_workspace; m_preparedRequest.scope=m_scope->checkedId();
+            m_preparedRequest = {}; m_preparedRequest.question=question; m_preparedRequest.kind=kind; m_preparedRequest.workspace=m_workspace; m_preparedRequest.provider=connection(); m_preparedRequest.provider.key.clear(); m_preparedRequest.scope=m_scope->checkedId();
             if (m_preparedRequest.scope != 0) {
                 m_preparedRequest.focus = m_preparedRequest.scope == 1 && !m_session.workspace(m_workspace).value(QStringLiteral("selectionContext")).toObject().isEmpty() ? workspaceContext() : m_contextSource ? m_contextSource(m_preparedRequest.scope == 1) : FocusContext{};
                 if (!m_preparedRequest.focus.error.isEmpty()) { showError(m_preparedRequest.focus.error); return; }
@@ -1078,7 +1148,7 @@ void AssistantWidget::start(const QString &question, const QString &kind)
         m_hasPreparedRequest = false;
     }
     m_status->setMessageType(KMessageWidget::Information);
-    m_active = connection();
+    m_active = connection(); m_active.effort=requestedEffort; m_active.modelMetadata=requestedMetadata;
     m_pending = question;
     m_kind = kind;
     m_context.clear();
@@ -1174,6 +1244,7 @@ void AssistantWidget::sendRequest()
             auto tab = m_session.workspace(m_workspace); auto images = tab.value(QStringLiteral("images")).toObject(); images.insert(key,QString::fromLatin1(m_focus.image.toBase64())); tab.insert(QStringLiteral("images"),images); m_session.setWorkspace(tab);
             auto context = message.value(QStringLiteral("context")).toObject(); context.insert(QStringLiteral("imageRef"),key); message.insert(QStringLiteral("context"),context);
         }
+        if(!m_active.effort.isEmpty()) message.insert(QStringLiteral("reasoningEffort"),m_active.effort);
         message.insert(QStringLiteral("workspace"), m_workspace);
         message.insert(QStringLiteral("attachments"), m_attachments);
         auto tab = m_session.workspace(m_workspace);
@@ -1282,6 +1353,7 @@ void AssistantWidget::finish(const QString &text, const QString &error)
     if (!text.isEmpty()) {
         m_session.append(QStringLiteral("assistant"), text, m_active.model, m_kind, error.isEmpty() ? QStringLiteral("complete") : QStringLiteral("interrupted"));
         auto answer = m_session.messages.last().toObject(); answer.insert(QStringLiteral("workspace"), m_workspace);
+        if(!m_active.effort.isEmpty()) answer.insert(QStringLiteral("reasoningEffort"),m_active.effort);
         m_session.messages[m_session.messages.size() - 1] = answer;
         if (!persist()) {
             journal();
@@ -1429,6 +1501,7 @@ void AssistantWidget::updateAccountUi()
             ? i18n("API connection · provider billing applies. A consumer chat subscription is not used by this connection.")
             : i18n("Local/custom connection · verify whether your chosen server runs locally or uses cloud services."));
     }
+    updateEffortUi();
     setBusy(m_busy);
 }
 void AssistantWidget::connectService()
@@ -1447,7 +1520,7 @@ void AssistantWidget::connectService()
         if (!m_auth->hasCredentials()) m_auth->signIn(); else m_auth->ensureAccess();
     } else {
         auto selected = connection();
-        selected.model = QStringLiteral("catalogue-check");
+        selected.model = QStringLiteral("catalogue-check"); selected.effort.clear();
         const auto error = Provider::validate(selected);
         if (!error.isEmpty()) { showError(error); return; }
         m_status->setMessageType(KMessageWidget::Information);

@@ -92,12 +92,13 @@ QString AssistantWidget::evidenceBody(const QString &text)
             m_evidence.insert(key, QJsonObject{{QStringLiteral("page"), page}, {QStringLiteral("quote"), quote}});
             html += QStringLiteral("<a href=\"okulair://evidence/%1\" title=\"%2\">[p. %3 · evidence]</a>").arg(key, quote.toHtmlEscaped()).arg(page + 1);
         } else {
-            html += QStringLiteral("[p. %1 · %2]").arg(match.captured(1), i18n("quote not located").toHtmlEscaped());
+            // Keep a page reference without presenting an unmatched quote as evidence.
+            html += QStringLiteral("[p. %1]").arg(match.captured(1));
         }
         previous = match.capturedEnd();
     }
     html += text.mid(previous).toHtmlEscaped();
-    html.replace(QRegularExpression(QStringLiteral("\\[p\\. ([1-9][0-9]*)\\]")), QStringLiteral("<a href=\"okulair://page/\\1\" title=\"Page reference only\">[p. \\1]</a>"));
+    html.replace(QRegularExpression(QStringLiteral("\\[p\\. ([1-9][0-9]*)\\]")), QStringLiteral("<a href=\"okulair://page/\\1\" title=\"AI page reference; exact passage not verified\">[p. \\1]</a>"));
     return html;
 }
 
@@ -222,8 +223,9 @@ void AssistantWidget::startBackgroundHighlights()
         if (!m_highlightFocus.error.isEmpty()) { showError(m_highlightFocus.error); return; }
         if (m_highlightFocus.text.trimmed().isEmpty() || m_highlightFocus.regions.isEmpty()) { showError(i18n("Choose available document text before highlighting this scope.")); return; }
     }
-    m_hasPreparedRequest = false;
     m_highlightConnection = connection();
+    if(m_hasPreparedRequest) { m_highlightConnection.effort=m_preparedRequest.provider.effort; m_highlightConnection.modelMetadata=m_preparedRequest.provider.modelMetadata; }
+    m_hasPreparedRequest = false;
     m_highlightText.clear(); m_highlightContext.clear();
     m_highlightPages.clear(); m_highlightBatchPages.clear(); m_highlightNextPage = 0;
     m_highlighting = true;

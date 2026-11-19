@@ -96,7 +96,7 @@ public:
                 if (defer && defer(input)) return;
                 socket->setProperty("sent", true);
                 if (input.startsWith("GET ")) {
-                    socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"data\":[{\"id\":\"discovered-model\"}]}");
+                    socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"+QJsonDocument(QJsonObject{{QStringLiteral("data"),models}}).toJson(QJsonDocument::Compact));
                     socket->disconnectFromHost();
                     return;
                 }
@@ -106,6 +106,7 @@ public:
             });
         });
     }
+    QJsonArray models{QJsonObject{{QStringLiteral("id"),QStringLiteral("discovered-model")}}};
     std::function<QString(const QByteArray &)> responder;
     std::function<bool(const QByteArray &)> defer;
     void stream(const QString &text, bool finish = false)
@@ -197,6 +198,9 @@ private Q_SLOTS:
     void screenshotPromptThumbnail();
     void selectExistingHighlightCategories();
     void checkedHighlightCategories();
+    void thinkingEffortUi();
+    void removedScreenshotStaysRemoved();
+    void deleteOtherChats();
     void consecutiveStreamingAnswers();
 };
 
@@ -875,7 +879,8 @@ void AiAssistantTest::pinnedContextAndSelectionActions()
     QVERIFY(SessionStore::load(&document, &saved, &error));
     QVERIFY(!saved.workspace(screenshotChat).contains(QStringLiteral("images")));
     QVERIFY(!saved.workspace(screenshotChat).contains(QStringLiteral("selectionContext")));
-    QVERIFY(!saved.messages.isEmpty()); // The other chat's messages survive.
+    QVERIFY(saved.messages.isEmpty()); // Clear chat removes every chat and resets Main chat.
+    QCOMPARE(saved.workspaces.size(), 1);
     document.undo();
     QVERIFY(SessionStore::load(&document, &saved, &error));
     QVERIFY(!saved.workspace(screenshotChat).value(QStringLiteral("images")).toObject().isEmpty());
@@ -960,7 +965,9 @@ void AiAssistantTest::exactEvidenceLinks()
     auto *history = widget.findChild<QTextBrowser *>();
     const auto html = history->toHtml();
     const auto match = QRegularExpression(QStringLiteral("href=\"(okulair://evidence/[^\"]+)\"")).match(html);
-    QVERIFY(match.hasMatch()); QVERIFY(history->toPlainText().contains(QLatin1String("quote not located")));
+    QVERIFY(match.hasMatch()); QVERIFY(!history->toPlainText().contains(QLatin1String("quote not located")));
+    QVERIFY(html.contains(QLatin1String("okulair://page/1")));
+    QCOMPARE(html.count(QLatin1String("okulair://evidence/")), 1);
     const bool clean = document.isHistoryClean(); const auto annotations = document.page(0)->annotations().size();
     QMetaObject::invokeMethod(history, "anchorClicked", Qt::DirectConnection, Q_ARG(QUrl, QUrl(match.captured(1))));
     QCOMPARE(document.currentPage(), 0u); QCOMPARE(document.page(0)->annotations().size(), annotations); QCOMPARE(document.isHistoryClean(), clean);
@@ -1271,4 +1278,94 @@ void AiAssistantTest::checkedHighlightCategories()
     QTRY_VERIFY([&] { int replaced=0; for(const auto *annotation:document.page(0)->annotations()) replaced+=annotation->contents().contains(QLatin1String("Regenerated checked cue")); return replaced==2; }());
     QCOMPARE(document.page(0)->annotations().size(),4); QVERIFY(document.page(0)->annotations().contains(unchecked)); QVERIFY(document.page(0)->annotations().contains(manual));
     QVERIFY(!QApplication::activeModalWidget());
+}
+
+void AiAssistantTest::thinkingEffortUi()
+{
+    QTemporaryDir directory; const auto path=directory.filePath(QStringLiteral("effort.pdf")); QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"),path));
+    Okular::Document document(nullptr); QVERIFY(open(document,path)); FakeEndpoint server; QVERIFY(server.listen(QHostAddress::LocalHost));
+    server.models=QJsonArray{QJsonObject{{QStringLiteral("id"),QStringLiteral("reasoning-test")},{QStringLiteral("default_reasoning_level"),QStringLiteral("medium")},{QStringLiteral("supported_reasoning_efforts"),QJsonArray{QStringLiteral("none"),QStringLiteral("medium"),QStringLiteral("high")}}}};
+    AssistantWidget widget(&document,nullptr); configure(widget,server);
+    widget.settingsWidget()->findChild<QPushButton *>(QStringLiteral("aiConnect"))->click();
+    auto *model=widget.findChild<QComboBox *>(QStringLiteral("aiModelPicker")); auto *effort=widget.findChild<QComboBox *>(QStringLiteral("aiThinkingEffort")); QVERIFY(effort);
+    QTRY_COMPARE(model->currentData().toString(),QStringLiteral("reasoning-test")); QVERIFY(effort->isEnabled()); QCOMPARE(effort->count(),4); QCOMPARE(effort->itemText(0),QStringLiteral("Default (medium)"));
+    effort->setCurrentIndex(effort->findData(QStringLiteral("high"))); QMetaObject::invokeMethod(effort,"activated",Q_ARG(int,effort->currentIndex()));
+    widget.findChild<QLineEdit *>(QStringLiteral("aiModel"))->setText(QStringLiteral("unknown")); QVERIFY(!effort->isEnabled()); QCOMPARE(effort->currentData().toString(),QString());
+    model->setCurrentIndex(0); QTRY_COMPARE(effort->currentData().toString(),QStringLiteral("high"));
+    server.hold=true; server.request.clear(); auto *question=widget.findChild<QPlainTextEdit *>(); question->setPlainText(QStringLiteral("First effort question")); answerSharing(); widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
+    QTRY_VERIFY(server.request.contains("First effort question")); QVERIFY(server.request.contains("\"reasoning_effort\":\"high\""));
+    effort->setCurrentIndex(effort->findData(QStringLiteral("medium"))); question->setPlainText(QStringLiteral("Queued effort question")); widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
+    effort->setCurrentIndex(effort->findData(QStringLiteral("none"))); server.hold=false; server.stream(QStringLiteral("First answer"),true);
+    QTRY_VERIFY(server.request.contains("Queued effort question")); QVERIFY(server.request.contains("\"reasoning_effort\":\"medium\""));
+    QTRY_VERIFY(!widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->isEnabled());
+    Session saved; QString error; QVERIFY(SessionStore::load(&document,&saved,&error)); QCOMPARE(saved.messages.last().toObject().value(QStringLiteral("reasoningEffort")).toString(),QStringLiteral("medium"));
+    QVERIFY(widget.findChild<QTextBrowser *>()->toPlainText().contains(QLatin1String("Thinking: medium")));
+}
+
+void AiAssistantTest::removedScreenshotStaysRemoved()
+{
+    QTemporaryDir directory;
+    const auto input = directory.filePath(QStringLiteral("input.pdf"));
+    const auto output = directory.filePath(QStringLiteral("output.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), input));
+    Okular::Document document(nullptr); QVERIFY(open(document, input));
+    {
+        AssistantWidget widget(&document, nullptr);
+        auto *question = widget.findChild<QPlainTextEdit *>(QStringLiteral("aiQuestion"));
+        QImage image(100, 100, QImage::Format_RGB32); image.fill(Qt::green);
+        QApplication::clipboard()->setImage(image);
+        QTest::keyClick(question, Qt::Key_V, Qt::ControlModifier);
+        QVERIFY(widget.findChild<QPushButton *>(QStringLiteral("aiAttachment0")));
+        // Tab changes persist the composer, reproducing the previously stale draft.
+        auto *tabs = widget.findChild<QTabBar *>(); QVERIFY(tabs);
+        widget.findChild<QToolButton *>(QStringLiteral("aiNewWorkspace"))->click();
+        tabs->setCurrentIndex(0);
+        Session saved; QString error; QVERIFY(SessionStore::load(&document, &saved, &error));
+        QCOMPARE(saved.workspace(QStringLiteral("main")).value(QStringLiteral("attachments")).toArray().size(), 1);
+        widget.findChild<QPushButton *>(QStringLiteral("aiAttachment0"))->click();
+        QVERIFY(!widget.findChild<QPushButton *>(QStringLiteral("aiAttachment0")));
+        QVERIFY(SessionStore::load(&document, &saved, &error));
+        QVERIFY(saved.workspace(QStringLiteral("main")).value(QStringLiteral("attachments")).toArray().isEmpty());
+        FocusContext capture; capture.label = QStringLiteral("Screenshot · p. 1");
+        QBuffer png(&capture.image); QVERIFY(png.open(QIODevice::WriteOnly)); QVERIFY(image.save(&png, "PNG")); png.close();
+        widget.prepareSelection(capture);
+        QVERIFY(widget.findChild<QPushButton *>(QStringLiteral("aiSelectionContext")));
+        widget.findChild<QPushButton *>(QStringLiteral("aiSelectionContext"))->click();
+        QVERIFY(SessionStore::load(&document, &saved, &error));
+        QVERIFY(!saved.workspace(QStringLiteral("main")).contains(QStringLiteral("selectionContext")));
+        QVERIFY(saved.workspace(QStringLiteral("main")).value(QStringLiteral("images")).toObject().isEmpty());
+        QVERIFY2(document.saveChanges(output, &error), qPrintable(error));
+    }
+    document.closeDocument(); QVERIFY(open(document, output));
+    AssistantWidget reopened(&document, nullptr);
+    QVERIFY(!reopened.findChild<QPushButton *>(QStringLiteral("aiAttachment0")));
+    QVERIFY(!reopened.findChild<QPushButton *>(QStringLiteral("aiSelectionContext")));
+}
+
+void AiAssistantTest::deleteOtherChats()
+{
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QStringLiteral("chats.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    Okular::Document document(nullptr); QVERIFY(open(document, path));
+    Session session; session.ensureWorkspaces(); session.append(QStringLiteral("user"), QStringLiteral("Keep Main history"));
+    auto other = session.workspace(QStringLiteral("main"));
+    other.insert(QStringLiteral("id"), QStringLiteral("other")); other.insert(QStringLiteral("title"), QStringLiteral("Other"));
+    other.insert(QStringLiteral("closed"), true); session.workspaces.append(other);
+    session.append(QStringLiteral("user"), QStringLiteral("Delete other history"));
+    auto message = session.messages.last().toObject(); message.insert(QStringLiteral("workspace"),QStringLiteral("other")); session.messages[session.messages.size()-1] = message;
+    QString error; QVERIFY(SessionStore::write(&document, session, &error));
+    AssistantWidget widget(&document, nullptr);
+    widget.settingsWidget()->findChild<QPushButton *>(QStringLiteral("aiDeleteOtherChats"))->click();
+    QVERIFY(SessionStore::load(&document, &session, &error));
+    QCOMPARE(session.workspaces.size(), 1); QCOMPARE(session.messages.size(), 1);
+    QCOMPARE(session.messages.first().toObject().value(QStringLiteral("content")).toString(), QStringLiteral("Keep Main history"));
+    widget.settingsWidget()->findChild<QPushButton *>(QStringLiteral("aiClearChat"))->click();
+    QVERIFY(SessionStore::load(&document, &session, &error));
+    QCOMPARE(session.workspaces.size(), 1); QVERIFY(session.messages.isEmpty());
+    const auto saved = directory.filePath(QStringLiteral("saved.pdf"));
+    QVERIFY(document.saveChanges(saved, &error));
+    Okular::Document reopened(nullptr); QVERIFY(open(reopened, saved));
+    QVERIFY(SessionStore::load(&reopened, &session, &error));
+    QCOMPARE(session.workspaces.size(), 1); QVERIFY(session.messages.isEmpty());
 }

@@ -4,6 +4,7 @@
 */
 #include "provider.h"
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QFile>
@@ -106,7 +107,9 @@ void EventStream::event(const QByteArray &data)
         const auto choices = obj.value(QStringLiteral("choices")).toArray();
         if (!choices.isEmpty()) {
             const auto choice = choices.first().toObject();
-            text += choice.value(QStringLiteral("delta")).toObject().value(QStringLiteral("content")).toString();
+            const auto content=choice.value(QStringLiteral("delta")).toObject().value(QStringLiteral("content"));
+            if(content.isString()) text+=content.toString();
+            else for(const auto &chunk:content.toArray()) if(chunk.toObject().value(QStringLiteral("type"))==QLatin1String("text")) text+=chunk.toObject().value(QStringLiteral("text")).toString();
             const auto reason = choice.value(QStringLiteral("finish_reason")).toString();
             if (reason == QLatin1String("length") || reason == QLatin1String("content_filter")) {
                 error = QStringLiteral("The response was truncated or filtered.");
@@ -120,8 +123,114 @@ Provider::~Provider() { cancel(); }
 
 bool Provider::accountClient(Protocol protocol) { return protocol == Protocol::GeminiAccount || protocol == Protocol::CopilotAccount || protocol == Protocol::QwenAccount; }
 QString Provider::accountExecutable(Protocol protocol) { return protocol == Protocol::GeminiAccount ? QStringLiteral("gemini") : protocol == Protocol::CopilotAccount ? QStringLiteral("copilot") : QStringLiteral("qwen"); }
+namespace {
+QStringList nativeEfforts(QString model)
+{
+    if (model.startsWith(QLatin1String("openai/"))) model=model.mid(7);
+    const QStringList basic{QStringLiteral("low"),QStringLiteral("medium"),QStringLiteral("high")};
+    model.remove(QRegularExpression(QStringLiteral("-[0-9]{4}-[0-9]{2}-[0-9]{2}$")));
+    if (QStringList{QStringLiteral("gpt-6-astra"),QStringLiteral("gpt-6.1-sol"),QStringLiteral("gpt-6.2-astra"),QStringLiteral("gpt-6.2-sol")}.contains(model)) return basic+QStringList{QStringLiteral("xhigh"),QStringLiteral("max")};
+    if (QStringList{QStringLiteral("gpt-6-sol"),QStringLiteral("gpt-6-luna"),QStringLiteral("gpt-6.1-terra")}.contains(model)) return QStringList{QStringLiteral("none")}+basic+QStringList{QStringLiteral("xhigh"),QStringLiteral("max")};
+    if (QStringList{QStringLiteral("gpt-5.2"),QStringLiteral("gpt-5.4"),QStringLiteral("gpt-5.5")}.contains(model)) return QStringList{QStringLiteral("none")}+basic+QStringList{QStringLiteral("xhigh")};
+    if (model==QLatin1String("gpt-5.1")) return QStringList{QStringLiteral("none")}+basic;
+    if (model==QLatin1String("gpt-5")) return QStringList{QStringLiteral("minimal")}+basic;
+    if (model==QLatin1String("o3") || model==QLatin1String("o3-mini") || model==QLatin1String("o4-mini")) return basic;
+    return {};
+}
+bool legacyClaude(const QString &model)
+{
+    return QRegularExpression(QStringLiteral("^claude-(3-7-sonnet|sonnet-4(?:-5)?|opus-4(?:-1|-5)?|haiku-4-5)(?:$|-[0-9]{8}$)")).match(model).hasMatch();
+}
+QStringList geminiEfforts(const QString &model)
+{
+    const QStringList basic{QStringLiteral("low"),QStringLiteral("medium"),QStringLiteral("high")};
+    if (model.contains(QLatin1String("image")) || model.contains(QLatin1String("live"))) return {};
+    if (model.startsWith(QLatin1String("gemini-2.5-flash"))) return QStringList{QStringLiteral("none")}+basic;
+    if (model.startsWith(QLatin1String("gemini-2.5-pro"))) return basic;
+    if (model.startsWith(QLatin1String("gemini-3-flash")) || model.startsWith(QLatin1String("gemini-3.1-flash-lite"))) return QStringList{QStringLiteral("minimal")}+basic;
+    if (model.startsWith(QLatin1String("gemini-3-pro")) || model.startsWith(QLatin1String("gemini-3.1-pro"))) return {QStringLiteral("low"),QStringLiteral("high")};
+    if (model==QLatin1String("gemini-4-neon") || model==QLatin1String("gemini-4-hydrogen")) return basic+QStringList{QStringLiteral("xhigh")};
+    return {};
+}
+}
+QString Provider::defaultEffort(const Connection &connection)
+{
+    // Client configuration and account routing can override API model defaults.
+    const auto options = effortOptions(connection);
+    for (const auto &key : {"defaultReasoningEffort", "default_reasoning_effort", "default_reasoning_level"}) {
+        const auto value = connection.modelMetadata.value(QLatin1String(key)).toString();
+        if (options.contains(value)) return value;
+    }
+    if (connection.protocol == Protocol::OpenAI) {
+        auto model = connection.model.toLower();
+        model.remove(QRegularExpression(QStringLiteral("-[0-9]{4}-[0-9]{2}-[0-9]{2}$")));
+        if (QStringList{QStringLiteral("gpt-5.5"), QStringLiteral("gpt-6.1-sol"), QStringLiteral("gpt-6-sol"), QStringLiteral("gpt-6-luna")}.contains(model)
+            && options.contains(QStringLiteral("medium"))) return QStringLiteral("medium");
+    }
+    return {};
+}
+
+QStringList Provider::effortOptions(const Connection &connection)
+{
+    const auto host=connection.endpoint.host().toLower(), model=connection.model.toLower();
+    const QStringList basic{QStringLiteral("low"),QStringLiteral("medium"),QStringLiteral("high")};
+    if (connection.protocol==Protocol::GeminiAccount) return geminiEfforts(model);
+    if (connection.protocol==Protocol::QwenAccount) return model.startsWith(QLatin1String("qwen3.8-max")) || model.startsWith(QLatin1String("qwen4")) ? basic+QStringList{QStringLiteral("xhigh"),QStringLiteral("max")} : QStringList{};
+    if (connection.protocol==Protocol::CopilotAccount) {
+        if (model.startsWith(QLatin1String("claude-"))) { auto api=connection; api.protocol=Protocol::Anthropic; auto values=effortOptions(api); values.removeAll(QStringLiteral("none")); return values; }
+        auto options=nativeEfforts(model); options.removeAll(QStringLiteral("none")); options.removeAll(QStringLiteral("minimal")); options.removeAll(QStringLiteral("max")); return options;
+    }
+    // Prefer the model catalogue over fallback model profiles, including an
+    // explicitly empty supported list. Never infer capability from display names.
+    QJsonArray advertised; bool explicitOptions=false;
+    for (const auto &key:{"supportedReasoningEfforts","supported_reasoning_efforts","supported_reasoning_levels"}) if (connection.modelMetadata.value(QLatin1String(key)).isArray()) { advertised=connection.modelMetadata.value(QLatin1String(key)).toArray(); explicitOptions=true; break; }
+    const auto deepseek=connection.modelMetadata.value(QStringLiteral("effort")).toObject();
+    if (!explicitOptions && deepseek.value(QStringLiteral("supported_levels")).isArray()) { advertised=deepseek.value(QStringLiteral("supported_levels")).toArray(); explicitOptions=true; }
+    if (explicitOptions) {
+        QStringList result;
+        for (const auto &entry:advertised) {
+            const auto value=entry.isString() ? entry.toString() : entry.toObject().value(QStringLiteral("effort")).toString(entry.toObject().value(QStringLiteral("reasoning_effort")).toString());
+            if (QStringList{QStringLiteral("none"),QStringLiteral("minimal"),QStringLiteral("low"),QStringLiteral("medium"),QStringLiteral("high"),QStringLiteral("xhigh"),QStringLiteral("max")}.contains(value) && !result.contains(value)) result.append(value);
+        }
+        if (host==QLatin1String("api.deepseek.com") && !result.isEmpty() && !result.contains(QStringLiteral("none"))) result.prepend(QStringLiteral("none"));
+        return result;
+    }
+    if (connection.protocol==Protocol::OpenAI || connection.protocol==Protocol::ChatGPT) return nativeEfforts(model);
+    if (connection.protocol==Protocol::Anthropic) {
+        if (legacyClaude(model)) return {QStringLiteral("none"),QStringLiteral("medium"),QStringLiteral("high")};
+        if (QRegularExpression(QStringLiteral("^claude-(opus-4-[678]|sonnet-4-6|(?:opus|sonnet|haiku|fable|mythos)-5(?:-[125])?)(?:$|-[0-9]{8}$)")).match(model).hasMatch()) {
+            auto values=basic;
+            if (!model.startsWith(QLatin1String("claude-opus-4-6")) && !model.startsWith(QLatin1String("claude-sonnet-4-6"))) values.append(QStringLiteral("xhigh"));
+            values.append(QStringLiteral("max")); return values;
+        }
+        return {};
+    }
+    if (host==QLatin1String("api.deepseek.com") && (model==QLatin1String("deepseek-flash") || model==QLatin1String("deepseek-pro") || model.startsWith(QLatin1String("deepseek-v4")))) return {QStringLiteral("none"),QStringLiteral("low"),QStringLiteral("high"),QStringLiteral("max")};
+    if (host==QLatin1String("generativelanguage.googleapis.com")) return geminiEfforts(model);
+    if (host==QLatin1String("api.groq.com")) {
+        if (model==QLatin1String("openai/gpt-oss-20b") || model==QLatin1String("openai/gpt-oss-120b")) return basic;
+        if (model==QLatin1String("qwen/qwen3.8-27b")) return QStringList{QStringLiteral("none")}+basic;
+        if (model==QLatin1String("meta-models/muse-spark-open")) return basic+QStringList{QStringLiteral("xhigh")};
+    }
+    if (host==QLatin1String("api.mistral.ai")) {
+        if(model==QLatin1String("mistral-small-2603") || model==QLatin1String("mistral-medium-3-5")) return {QStringLiteral("none"),QStringLiteral("high")};
+        if(model==QLatin1String("mistral-large-4") || model==QLatin1String("mistral-large-4-0")) return basic;
+        if(model==QLatin1String("zai-glm-5-3") || model==QLatin1String("zai-glm-5-3-flash")) return {QStringLiteral("low"),QStringLiteral("high"),QStringLiteral("max")};
+    }
+    if (host==QLatin1String("api.x.ai")) {
+        if (model.startsWith(QLatin1String("grok-4.6")) || model.startsWith(QLatin1String("grok-4.7"))) return basic+QStringList{QStringLiteral("xhigh")};
+        if (model.startsWith(QLatin1String("grok-4.5"))) return basic;
+        if (model.startsWith(QLatin1String("grok-3-mini"))) return {QStringLiteral("low"),QStringLiteral("high")};
+    }
+    if (host==QLatin1String("openrouter.ai") && connection.modelMetadata.value(QStringLiteral("supported_parameters")).toArray().contains(QStringLiteral("reasoning"))) {
+        auto native=nativeEfforts(model); if (!native.isEmpty()) return native; return basic;
+    }
+    return {};
+}
+
 QString Provider::validate(const Connection &connection)
 {
+    if (!connection.effort.isEmpty() && !effortOptions(connection).contains(connection.effort)) return QStringLiteral("The selected thinking effort is not supported by this model. Choose Default or a supported level.");
     if (accountClient(connection.protocol)) {
         return QStandardPaths::findExecutable(accountExecutable(connection.protocol)).isEmpty() ? QStringLiteral("Install the selected provider's official CLI, then use Sign in using official client. No API key is required.") : QString();
     }
@@ -182,6 +291,24 @@ QJsonObject Provider::requestBody(const Connection &connection, const QString &i
         }
         body.insert(QStringLiteral("messages"), messages);
     }
+    if (!connection.effort.isEmpty() && effortOptions(connection).contains(connection.effort)) {
+        const auto effort=connection.effort; const auto host=connection.endpoint.host();
+        if (connection.protocol==Protocol::OpenAI || connection.protocol==Protocol::ChatGPT || host==QLatin1String("openrouter.ai")) body.insert(QStringLiteral("reasoning"),QJsonObject{{QStringLiteral("effort"),effort}});
+        else if (connection.protocol==Protocol::Anthropic) {
+            if (legacyClaude(connection.model.toLower())) {
+                const int budget=effort==QLatin1String("high") ? 8192 : 4096;
+                body.insert(QStringLiteral("thinking"),effort==QLatin1String("none") ? QJsonObject{{QStringLiteral("type"),QStringLiteral("disabled")}} : QJsonObject{{QStringLiteral("type"),QStringLiteral("enabled")},{QStringLiteral("budget_tokens"),budget}});
+                if(effort!=QLatin1String("none")) body.insert(QStringLiteral("max_tokens"),budget+4096);
+            } else {
+                body.insert(QStringLiteral("output_config"),QJsonObject{{QStringLiteral("effort"),effort}});
+                body.insert(QStringLiteral("thinking"),QJsonObject{{QStringLiteral("type"),QStringLiteral("adaptive")}});
+                body.insert(QStringLiteral("max_tokens"),32768);
+            }
+        } else if (host==QLatin1String("api.deepseek.com")) {
+            body.insert(QStringLiteral("thinking"),QJsonObject{{QStringLiteral("type"),effort==QLatin1String("none") ? QStringLiteral("disabled") : QStringLiteral("enabled")}});
+            if(effort!=QLatin1String("none")) body.insert(QStringLiteral("reasoning_effort"),effort);
+        } else body.insert(QStringLiteral("reasoning_effort"),effort);
+    }
     return body;
 }
 
@@ -204,7 +331,7 @@ void Provider::start(const Connection &connection, const QString &instructions, 
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Accept", "text/event-stream");
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
-    request.setTransferTimeout(120000);
+    request.setTransferTimeout(connection.effort.isEmpty() || connection.effort==QLatin1String("none") ? 120000 : 600000);
     if (!connection.key.isEmpty()) {
         request.setRawHeader(connection.protocol == Protocol::Anthropic ? "x-api-key" : "Authorization",
                              (connection.protocol == Protocol::Anthropic ? QByteArray() : QByteArray("Bearer ")) + connection.key.toUtf8());
@@ -271,7 +398,7 @@ void Provider::listModels(const Connection &connection)
     cancel();
     if (accountClient(connection.protocol)) { Q_EMIT modelsListed(QJsonArray{QJsonObject{{QStringLiteral("id"),QStringLiteral("auto")}}}, {}); return; }
     auto validation = connection;
-    validation.model = QStringLiteral("catalogue-check");
+    validation.model = QStringLiteral("catalogue-check"); validation.effort.clear();
     const auto error = validate(validation);
     if (!error.isEmpty()) { Q_EMIT modelsListed({}, error); return; }
     auto url = connection.endpoint;
@@ -323,6 +450,15 @@ void Provider::startAccountClient(const Connection &connection, const QString &i
         {QStringLiteral("context"), QJsonObject{{QStringLiteral("fileName"),QStringLiteral("__okulair_no_context__.md")}}},
         {QStringLiteral("skills"), QJsonObject{{QStringLiteral("enabled"),false}}}};
     settings.insert(QStringLiteral("admin"), QJsonObject{{QStringLiteral("mcp"),QJsonObject{{QStringLiteral("enabled"),false}}},{QStringLiteral("extensions"),QJsonObject{{QStringLiteral("enabled"),false}}},{QStringLiteral("skills"),QJsonObject{{QStringLiteral("enabled"),false}}}});
+    if (!connection.effort.isEmpty()) {
+        if (connection.protocol==Protocol::QwenAccount) settings.insert(QStringLiteral("model"),QJsonObject{{QStringLiteral("reasoningEffort"),connection.effort}});
+        if (connection.protocol==Protocol::GeminiAccount) {
+            QJsonObject thinking;
+            if(connection.model.startsWith(QLatin1String("gemini-2.5"))) thinking.insert(QStringLiteral("thinkingBudget"),connection.effort==QLatin1String("none") ? 0 : connection.effort==QLatin1String("low") ? 1024 : connection.effort==QLatin1String("medium") ? 8192 : 24576);
+            else thinking.insert(QStringLiteral("thinkingLevel"),connection.effort.toUpper());
+            settings.insert(QStringLiteral("modelConfigs"),QJsonObject{{QStringLiteral("overrides"),QJsonArray{QJsonObject{{QStringLiteral("match"),QJsonObject{{QStringLiteral("model"),connection.model}}},{QStringLiteral("modelConfig"),QJsonObject{{QStringLiteral("generateContentConfig"),QJsonObject{{QStringLiteral("thinkingConfig"),thinking}}}}}}}}});
+        }
+    }
     QFile file(settingsPath);
     if (!file.open(QIODevice::WriteOnly) || file.write(QJsonDocument(settings).toJson()) < 0) { Q_EMIT finished({}, QStringLiteral("Could not configure the account client.")); return; }
     file.close();
@@ -339,8 +475,9 @@ void Provider::startAccountClient(const Connection &connection, const QString &i
     } else {
         arguments = {QStringLiteral("--output-format"),QStringLiteral("json"),QStringLiteral("-p"),QStringLiteral("Answer the document question supplied on standard input. Do not use tools.")};
         if (connection.protocol == Protocol::GeminiAccount) arguments << QStringLiteral("--extensions") << QStringLiteral("none");
-        else arguments << QStringLiteral("--safe-mode") << QStringLiteral("--max-tool-calls") << QStringLiteral("0") << QStringLiteral("--max-session-turns") << QStringLiteral("1") << QStringLiteral("--max-wall-time") << QStringLiteral("180s");
+        else arguments << QStringLiteral("--safe-mode") << QStringLiteral("--max-tool-calls") << QStringLiteral("0") << QStringLiteral("--max-session-turns") << QStringLiteral("1") << QStringLiteral("--max-wall-time") << (connection.effort.isEmpty() ? QStringLiteral("180s") : QStringLiteral("600s"));
     }
+    if (connection.protocol==Protocol::CopilotAccount && !connection.effort.isEmpty()) arguments << QStringLiteral("--reasoning-effort") << connection.effort;
     if (!connection.model.isEmpty() && connection.model != QLatin1String("auto")) arguments << QStringLiteral("--model") << connection.model;
     // No shell or document text in argv. Prevent CLI @file expansion in evidence.
     auto prompt = QString::fromUtf8(QJsonDocument(QJsonObject{{QStringLiteral("instructions"),instructions},{QStringLiteral("conversation"),history}}).toJson());
@@ -372,7 +509,7 @@ void Provider::startAccountClient(const Connection &connection, const QString &i
         else { Q_EMIT updated(answer); Q_EMIT finished(answer,{}); }
     });
     connect(process,&QProcess::readyReadStandardError,process,[process] { process->readAllStandardError(); });
-    QTimer::singleShot(180000,process,[owner=QPointer<Provider>(this),process] { if(owner && owner->m_process==process) process->kill(); });
+    QTimer::singleShot(connection.effort.isEmpty() ? 180000 : 600000,process,[owner=QPointer<Provider>(this),process] { if(owner && owner->m_process==process) process->kill(); });
     connect(process,&QProcess::started,process,[process,prompt] { process->write(prompt.toUtf8()); process->closeWriteChannel(); });
     process->start(QStandardPaths::findExecutable(accountExecutable(connection.protocol)),arguments);
 }
