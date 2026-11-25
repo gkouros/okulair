@@ -73,11 +73,35 @@ std::unique_ptr<Okular::RegularAreaRect> quoteArea(const Okular::Page *page, con
 QString AssistantWidget::evidenceBody(const QString &text)
 {
     const QRegularExpression pattern(QStringLiteral("\\[p\\. ([1-9][0-9]*) *\\| *([^\\]\\n]{3,300})\\]"));
+    // Strip page-only citations before escaping, never from generated links.
+    const auto plain = [](QString value) {
+        value.remove(QRegularExpression(QStringLiteral("\\[(?:pp?\\.?)\\s*[1-9][0-9]*(?:\\s*[,;–—-]\\s*[1-9][0-9]*)*\\s*\\]")));
+        value.replace(QRegularExpression(QStringLiteral(" +([.,;:!?])")), QStringLiteral("\\1"));
+        return value.toHtmlEscaped();
+    };
     QString html; qsizetype previous = 0;
+    int groupPage = -1;
+    QList<QPair<QString, QString>> passages;
+    const auto flush = [&] {
+        if (passages.isEmpty()) return;
+        const auto link = [](const auto &passage, const QString &label) {
+            return QStringLiteral("<a href=\"okulair://evidence/%1\" title=\"%2\">%3</a>")
+                .arg(passage.first, passage.second.toHtmlEscaped(), label);
+        };
+        if (passages.size() == 1) html += link(passages.first(), QStringLiteral("[p. %1]").arg(groupPage + 1));
+        else {
+            QStringList links;
+            for (qsizetype i = 0; i < passages.size(); ++i) links.append(link(passages.at(i), QString::number(i + 1)));
+            html += QStringLiteral("[p. %1: %2]").arg(groupPage + 1).arg(links.join(QStringLiteral(", ")));
+        }
+        passages.clear(); groupPage = -1;
+    };
     auto matches = pattern.globalMatch(text);
     while (matches.hasNext()) {
         const auto match = matches.next();
-        html += text.mid(previous, match.capturedStart() - previous).toHtmlEscaped();
+        const auto gap = plain(text.mid(previous, match.capturedStart() - previous));
+        if (!gap.trimmed().isEmpty()) { flush(); html += gap; }
+        else if (passages.isEmpty()) html += gap;
         const int page = match.captured(1).toInt() - 1;
         const auto quote = match.captured(2).trimmed();
         bool exact = false;
@@ -90,15 +114,19 @@ QString AssistantWidget::evidenceBody(const QString &text)
         if (exact) {
             const auto key = QString::fromLatin1(QCryptographicHash::hash((QString::number(page) + QLatin1Char('\n') + quote).toUtf8(), QCryptographicHash::Sha256).toHex());
             m_evidence.insert(key, QJsonObject{{QStringLiteral("page"), page}, {QStringLiteral("quote"), quote}});
-            html += QStringLiteral("<a href=\"okulair://evidence/%1\" title=\"%2\">[p. %3 · evidence]</a>").arg(key, quote.toHtmlEscaped()).arg(page + 1);
+            if (!passages.isEmpty() && groupPage != page) { flush(); html += QLatin1Char(' '); }
+            groupPage = page;
+            const QPair<QString, QString> passage{key, quote};
+            if (!passages.contains(passage)) passages.append(passage);
         } else {
-            // Keep a page reference without presenting an unmatched quote as evidence.
-            html += QStringLiteral("[p. %1]").arg(match.captured(1));
+            // No exact, unique passage: omit the citation rather than show a
+            // weaker page-only link. Do not change the stored model response.
+            if (passages.isEmpty()) while (html.endsWith(QLatin1Char(' '))) html.chop(1);
         }
         previous = match.capturedEnd();
     }
-    html += text.mid(previous).toHtmlEscaped();
-    html.replace(QRegularExpression(QStringLiteral("\\[p\\. ([1-9][0-9]*)\\]")), QStringLiteral("<a href=\"okulair://page/\\1\" title=\"AI page reference; exact passage not verified\">[p. \\1]</a>"));
+    flush();
+    html += plain(text.mid(previous));
     return html;
 }
 
@@ -256,8 +284,9 @@ void AssistantWidget::extractHighlights(int page, quint64 generation)
     sendHighlightBatch();
 }
 
-void AssistantWidget::stopHighlights()
+void AssistantWidget::stopHighlights(bool cancelled)
 {
+    const bool wasRunning = m_highlighting;
     ++m_highlightGeneration;
     m_highlightProvider.cancel();
     m_highlighting = false;
@@ -265,6 +294,12 @@ void AssistantWidget::stopHighlights()
     m_highlightFocus = {};
     m_highlightConnection.key.clear();
     setBusy(m_busy);
+    if (cancelled && wasRunning) {
+        m_status->setMessageType(KMessageWidget::Information);
+        m_status->setText(m_busy
+            ? i18n("Highlighting cancelled. The current AI request continues. Already-applied highlights are kept.")
+            : i18n("Highlighting cancelled. Already-applied highlights are kept. Ctrl+S saves them."));
+    }
 }
 
 void AssistantWidget::finishHighlights(const QString &text, const QString &error)

@@ -19,17 +19,54 @@
 #include <QPlainTextEdit>
 #include <QTimer>
 #include <QUuid>
+#include <QFrame>
+#include <QScreen>
+#include <QPainter>
 using namespace OkulAIr;
 void AssistantWidget::initRequests()
 {
-    m_requestPanel = new QWidget(this); m_requestPanel->setObjectName(QStringLiteral("aiRequests"));
-    auto *layout = new QVBoxLayout(m_requestPanel); layout->setContentsMargins(0, 0, 0, 0);
-    m_requestToggle = new QToolButton(m_requestPanel); m_requestToggle->setCheckable(true); m_requestToggle->setChecked(true);
-    m_requestToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon); m_requestToggle->setArrowType(Qt::DownArrow);
-    m_requestList = new QListWidget(m_requestPanel); m_requestList->setObjectName(QStringLiteral("aiRequestList")); m_requestList->setMaximumHeight(120);
-    layout->addWidget(m_requestToggle); layout->addWidget(m_requestList);
-    static_cast<QVBoxLayout *>(this->layout())->insertWidget(1, m_requestPanel);
-    connect(m_requestToggle, &QToolButton::toggled, this, [this](bool expanded) { m_requestList->setVisible(expanded); m_requestToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow); });
+    m_requestToggle = new QToolButton(this);
+    m_requestToggle->setObjectName(QStringLiteral("aiRequestActivity"));
+    m_requestToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_requestToggle->setIcon(QIcon::fromTheme(QStringLiteral("view-task")));
+    m_requestToggle->setToolTip(i18n("Show active and queued requests"));
+    m_requestToggle->setAccessibleName(i18n("Request activity"));
+    // Reserve a constant toolbar footprint in every activity state.
+    m_requestToggle->setFixedWidth(m_requestToggle->fontMetrics().horizontalAdvance(i18n("Working · 34")) + 40);
+    findChild<QHBoxLayout *>(QStringLiteral("aiChatTools"))->addWidget(m_requestToggle);
+    auto *popup = new QFrame(this, Qt::Popup);
+    popup->setFrameShape(QFrame::StyledPanel);
+    popup->setAttribute(Qt::WA_NoMouseReplay);
+    m_requestPanel = popup; popup->setObjectName(QStringLiteral("aiRequests"));
+    auto *layout = new QVBoxLayout(popup);
+    layout->addWidget(new QLabel(i18n("Active requests"), popup));
+    m_requestList = new QListWidget(popup);
+    m_requestList->setObjectName(QStringLiteral("aiRequestList"));
+    m_requestList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    layout->addWidget(m_requestList);
+    connect(m_requestToggle, &QToolButton::clicked, this, [this] {
+        if (m_requestPanel->isVisible()) { m_requestPanel->hide(); return; }
+        const auto available = m_requestToggle->screen()->availableGeometry();
+        const int rows = qMax(1, m_requestList->count());
+        const int height = qMin(280, 65 + rows * qMax(24, m_requestList->sizeHintForRow(0)));
+        m_requestPanel->resize(qMin(420, available.width()), qMin(height, available.height()));
+        auto point = m_requestToggle->mapToGlobal(QPoint(m_requestToggle->width(), m_requestToggle->height()));
+        point.rx() -= m_requestPanel->width();
+        if (point.y() + m_requestPanel->height() > available.bottom()) point.setY(m_requestToggle->mapToGlobal(QPoint(0, 0)).y() - m_requestPanel->height());
+        point.setX(qBound(available.left(), point.x(), available.right() - m_requestPanel->width() + 1));
+        point.setY(qBound(available.top(), point.y(), available.bottom() - m_requestPanel->height() + 1));
+        m_requestPanel->move(point); m_requestPanel->show();
+    });
+    auto *spinner = new QTimer(m_requestToggle); spinner->setObjectName(QStringLiteral("aiActivitySpinner")); spinner->setInterval(100);
+    connect(spinner, &QTimer::timeout, this, [this, angle = 0]() mutable {
+        const bool working = m_busy || m_highlighting || !m_requests.isEmpty();
+        if (!working) return;
+        QPixmap pixmap(32, 32); pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap); painter.setRenderHint(QPainter::Antialiasing); painter.translate(16,16); painter.rotate(angle);
+        painter.setPen(QPen(m_requestToggle->palette().color(QPalette::Highlight), 3, Qt::SolidLine, Qt::RoundCap));
+        painter.drawArc(QRectF(-11,-11,22,22), 0, 270*16); painter.end();
+        m_requestToggle->setIcon(QIcon(pixmap)); angle = (angle + 30) % 360;
+    });
     m_autoExplain = new QCheckBox(i18n("Explain my new highlights automatically"), m_settings);
     m_autoExplain->setObjectName(QStringLiteral("aiAutoExplainHighlights"));
     m_autoExplain->setToolTip(i18n("Add a brief AI explanation to new manual highlights using the selected service. Sharing permission is required."));
@@ -45,19 +82,30 @@ void AssistantWidget::refreshRequests()
     const auto add = [this](const QString &id, const QString &title, bool running) {
         auto *item = new QListWidgetItem(m_requestList); auto *row = new QWidget(m_requestList);
         auto *layout = new QHBoxLayout(row); layout->setContentsMargins(3, 1, 3, 1);
-        auto *label = new QLabel((running ? i18n("Running · ") : i18n("Queued · ")) + title.simplified().left(65), row);
-        label->setTextFormat(Qt::PlainText); label->setToolTip(title); layout->addWidget(label, 1);
+        auto *details = new QVBoxLayout; details->setSpacing(2);
+        auto *label = new QLabel(row);
+        label->setText(label->fontMetrics().elidedText(title.simplified(), Qt::ElideRight, 320));
+        label->setTextFormat(Qt::PlainText); label->setToolTip(title); details->addWidget(label);
+        auto *state = new QLabel(id == QLatin1String("background-highlights") ? i18n("Working in background") : running ? i18n("Running") : i18n("Queued"), row);
+        auto font = state->font(); font.setPointSizeF(qMax(8.0, font.pointSizeF() - 1)); state->setFont(font);
+        details->addWidget(state); layout->addLayout(details, 1);
         auto *cancel = new QToolButton(row); cancel->setText(QStringLiteral("×")); cancel->setToolTip(i18n("Cancel this request"));
         cancel->setObjectName(id == QLatin1String("background-highlights") ? QStringLiteral("aiCancelHighlights") : running ? QStringLiteral("aiCancelRunningRequest") : QStringLiteral("aiCancelRequest_%1").arg(id));
         layout->addWidget(cancel); item->setSizeHint(row->sizeHint()); m_requestList->setItemWidget(item, row);
-        connect(cancel, &QToolButton::clicked, this, [this, id, running] { if (id == QLatin1String("background-highlights")) stopHighlights(); else if (running) stop(); else { m_requests.removeIf([&id](const Request &request) { return request.id == id; }); refreshRequests(); } });
+        connect(cancel, &QToolButton::clicked, this, [this, id, running] { if (id == QLatin1String("background-highlights")) stopHighlights(true); else if (running) stop(); else { m_requests.removeIf([&id](const Request &request) { return request.id == id; }); refreshRequests(); } });
     };
     const auto title = [](const QString &kind, const QString &question) { return kind == QLatin1String("highlights") ? i18n("Highlight document") : kind == QLatin1String("summary") ? i18n("Paper overview") : kind == QLatin1String("annotation") ? i18n("Explain highlight") : question; };
     if (m_highlighting) add(QStringLiteral("background-highlights"), i18n("Highlight document · page %1 of %2", m_highlightNextPage, m_highlightPages.size()), true);
     if (m_busy) add(m_runningRequestId, title(m_kind, m_pending), true);
     for (const auto &request : m_requests) add(request.id, title(request.kind, request.question), false);
-    m_requestToggle->setText(i18n("Requests (%1)", m_requests.size() + int(m_busy) + int(m_highlighting)));
-    m_requestPanel->setVisible(m_busy || m_highlighting || !m_requests.isEmpty());
+    const int count = m_requests.size() + int(m_busy) + int(m_highlighting);
+    m_requestToggle->setEnabled(count > 0);
+    m_requestToggle->setText(count ? i18n("Working · %1", count) : QString());
+    auto *spinner = m_requestToggle->findChild<QTimer *>(QStringLiteral("aiActivitySpinner"));
+    if (count && !spinner->isActive()) spinner->start();
+    else if (!count) spinner->stop();
+    m_requestToggle->setToolTip(count ? i18n("%1 active or queued requests. Click to view or cancel.", count) : i18n("No active requests"));
+    if (!count) { m_requestPanel->hide(); m_requestToggle->setIcon(QIcon::fromTheme(QStringLiteral("view-task"))); }
 }
 void AssistantWidget::queueRequest(Request request)
 {

@@ -325,11 +325,16 @@ Textual claims are requested with citations of the form
 `[p. N | short exact supporting quote]`. The UI validates the quote against the
 physical page; only a unique exact match becomes an **evidence** link. Clicking
 it centers and briefly outlines/highlights the exact text independently of the
-reader's text selection and normal search. An unmatched/ambiguous quote falls back to a normal page link, whose tooltip
-explains that the exact passage was not verified. Plain `[p. N]` references remain page links and are not
-presented as exact evidence. Quote-location verification does not prove that the
+reader's text selection and normal search. Verified passage links display simply as `[p. N]`, with the direct quote in
+the tooltip. Adjacent links to different passages on the same page are grouped
+as `[p. N: 1, 2]`, with each number linking to its own passage. Adjacent links to
+the identical passage are collapsed. Separate claims retain their own citations.
+Unmatched or ambiguous quotes and page-only references are omitted
+from the rendered answer, including restored conversations. Stored model replies
+are preserved. No page-only link is presented as evidence. Quote-location verification does not prove that the
 quote supports the model's interpretation. Figures without extractable text use
-page references instead of pretending to provide a textual quote anchor.
+descriptive figure or region labels without pretending to provide a textual
+quote anchor.
 
 Right-click selected PDF text → **Ask AI about selection** or **Ask AI about
 selection in a new chat**. Then type your question. No preset reading-tools submenu
@@ -527,3 +532,20 @@ support Ctrl+Z; Ctrl+S writes the change to disk. Removing a draft attachment
 also updates the saved workspace immediately, so it cannot reappear after a
 save/reopen cycle. Images already submitted in chat history remain with those
 messages until their chat is cleared or deleted.
+
+
+## Stable chat activity and streaming
+
+Request activity uses a fixed-size toolbar button. It shows a spinner and a
+count while work is active, and an activity icon while idle. Its popup lists
+running and queued requests with individual cancellation controls. Opening,
+closing or updating the popup does not change the chat layout; Escape or an
+outside click dismisses it. Background highlights remain independent of chat.
+
+Streaming answers refresh only the current answer body in 120 ms batches.
+The same escaped Markdown subset is used while streaming and after completion:
+headings, bold text, bullets, inline code and fenced code. An unfinished bold
+span renders as bold immediately. Provider HTML is displayed literally, and
+remote Markdown images and links are not interpreted. Older cards are retained,
+scroll-up keeps the reader's position, and returning to the bottom resumes
+following new content.

@@ -107,7 +107,7 @@ private:
     void startBackgroundHighlights();
     void extractHighlights(int page, quint64 generation);
     void finishHighlights(const QString &text, const QString &error);
-    void stopHighlights();
+    void stopHighlights(bool cancelled = false);
     Provider m_highlightProvider;
     bool m_highlighting = false;
     quint64 m_highlightGeneration = 0;
@@ -191,6 +191,8 @@ private:
     QTimer *m_streamTimer;
     QString m_renderedPartial;
     int m_streamPosition = -1;
+    int m_streamStart = -1;
+    QString formattedAnswer(const QString &text);
     std::function<FocusContext(bool)> m_contextSource;
     FocusContext m_focus;
     int m_activeScope = 0;

@@ -187,12 +187,14 @@ private Q_SLOTS:
     void legacyWorkspaceMigration();
     void pinnedContextAndSelectionActions();
     void exactEvidenceLinks();
+    void groupedEvidenceLinks();
     void highlightCategoriesAndFilters();
     void highlightBatchCoverage();
     void requestQueueAndCancellation();
     void explainManualHighlight();
     void editableCategories();
     void independentBackgroundHighlights();
+    void cancelledHighlightStatus();
     void copyChatShortcut();
     void apiConnectionError();
     void screenshotPromptThumbnail();
@@ -202,6 +204,8 @@ private Q_SLOTS:
     void removedScreenshotStaysRemoved();
     void deleteOtherChats();
     void consecutiveStreamingAnswers();
+    void requestPopupKeepsLayout();
+    void progressivelyFormattedAnswer();
 };
 
 void AiAssistantTest::initTestCase()
@@ -282,7 +286,7 @@ void AiAssistantTest::chatAndConsent()
     const auto html = widget.findChild<QTextBrowser *>()->toHtml();
     QVERIFY(html.contains(QLatin1String("&lt;img")));
     QVERIFY(!html.contains(QLatin1String("<img src=\"https://example.com")));
-    QVERIFY(html.contains(QLatin1String("okulair://page/1")));
+    QVERIFY(!html.contains(QLatin1String("okulair://page/")));
     if (qEnvironmentVariableIsSet("OKULAIR_TEST_PREVIEW")) {
         widget.resize(430, 850);
         widget.show();
@@ -321,7 +325,7 @@ void AiAssistantTest::summary()
     QVERIFY(!plain.contains(QLatin1String("##")));
     QVERIFY(!plain.contains(QLatin1String("**")));
     QVERIFY(!plain.contains(QLatin1String("Create a reader-friendly")));
-    QVERIFY(history->toHtml().contains(QLatin1String("okulair://page/1")));
+    QVERIFY(!history->toHtml().contains(QLatin1String("okulair://page/")));
     QVERIFY(!history->toHtml().contains(QLatin1String("<img src=\"https://example.com")));
     if (qEnvironmentVariableIsSet("OKULAIR_OVERVIEW_PREVIEW")) {
         widget.resize(460, 850); widget.show(); QTest::qWait(20);
@@ -644,7 +648,7 @@ void AiAssistantTest::streamingScrollControl()
     server.stream(first + QStringLiteral("stream-marker-two"));
     QTRY_VERIFY(history->toPlainText().contains(QLatin1String("stream-marker-two")));
     QCOMPARE(scroll->value(), scroll->maximum());
-    for (const auto &change : changes) QCOMPARE(change.at(1).toInt(), 0); // Append; never replace the transcript mid-stream.
+    for (const auto &change : changes) QVERIFY(change.at(0).toInt() > history->toPlainText().indexOf(QStringLiteral("AI assistant"))); // Only the active answer is reformatted.
     scroll->setValue(scroll->maximum() / 2);
     const auto finalReadingPosition = scroll->value();
     server.stream(QStringLiteral("Finished."), true);
@@ -956,8 +960,10 @@ void AiAssistantTest::editableCategories()
 
 void AiAssistantTest::exactEvidenceLinks()
 {
-    Okular::Document document(nullptr); QVERIFY(open(document, QStringLiteral("file1.pdf")));
-    FakeEndpoint server; server.answer = QStringLiteral("A grounded claim [p. 1 | some random text]. An invented claim [p. 1 | made-up-source-quote]."); QVERIFY(server.listen(QHostAddress::LocalHost));
+    QTemporaryDir directory; const auto path = directory.filePath(QStringLiteral("evidence.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    Okular::Document document(nullptr); QVERIFY(open(document, path));
+    FakeEndpoint server; server.answer = QStringLiteral("A grounded claim [p. 1 | some random text]. An invented claim [p. 1 | made-up-source-quote]. Page-only reference [p. 1]. Grouped reference [pp. 1, 2–3]. Invalid page [p. 999 | some random text]."); QVERIFY(server.listen(QHostAddress::LocalHost));
     AssistantWidget widget(&document, nullptr); configure(widget, server);
     widget.findChild<QPlainTextEdit *>(QStringLiteral("aiQuestion"))->setPlainText(QStringLiteral("Explain with evidence"));
     answerSharing(); widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
@@ -966,12 +972,24 @@ void AiAssistantTest::exactEvidenceLinks()
     const auto html = history->toHtml();
     const auto match = QRegularExpression(QStringLiteral("href=\"(okulair://evidence/[^\"]+)\"")).match(html);
     QVERIFY(match.hasMatch()); QVERIFY(!history->toPlainText().contains(QLatin1String("quote not located")));
-    QVERIFY(html.contains(QLatin1String("okulair://page/1")));
+    QVERIFY(!html.contains(QLatin1String("okulair://page/")));
     QCOMPARE(html.count(QLatin1String("okulair://evidence/")), 1);
+    QCOMPARE(history->toPlainText().count(QStringLiteral("[p. 1]")), 1);
+    QVERIFY(!history->toPlainText().contains(QLatin1String("· evidence")));
+    QVERIFY(!history->toPlainText().contains(QLatin1String("[pp.")));
+    QVERIFY(!history->toPlainText().contains(QLatin1String("[p. 999")));
     const bool clean = document.isHistoryClean(); const auto annotations = document.page(0)->annotations().size();
     QMetaObject::invokeMethod(history, "anchorClicked", Qt::DirectConnection, Q_ARG(QUrl, QUrl(match.captured(1))));
     QCOMPARE(document.currentPage(), 0u); QCOMPARE(document.page(0)->annotations().size(), annotations); QCOMPARE(document.isHistoryClean(), clean);
     QVERIFY(!document.page(0)->textSelection()); // Evidence does not overwrite the user's selection.
+    const auto saved = directory.filePath(QStringLiteral("saved.pdf")); QString error;
+    QVERIFY(document.saveChanges(saved, &error));
+    Okular::Document reopened(nullptr); QVERIFY(open(reopened, saved));
+    AssistantWidget restored(&reopened, nullptr);
+    const auto restoredHtml = restored.findChild<QTextBrowser *>()->toHtml();
+    QCOMPARE(restoredHtml.count(QLatin1String("okulair://evidence/")), 1);
+    QVERIFY(!restoredHtml.contains(QLatin1String("okulair://page/")));
+    QCOMPARE(restored.findChild<QTextBrowser *>()->toPlainText().count(QStringLiteral("[p. 1]")), 1);
 }
 
 void AiAssistantTest::highlightCategoriesAndFilters()
@@ -1203,7 +1221,7 @@ void AiAssistantTest::consecutiveStreamingAnswers()
     server.stream(QStringLiteral(" More text follows smoothly."));
     QTRY_VERIFY(history->toPlainText().contains(QLatin1String("More text follows smoothly.")));
     QVERIFY(history->toPlainText().contains(server.answer));
-    for(const auto &change:changes) QCOMPARE(change.at(1).toInt(),0);
+    for(const auto &change:changes) QVERIFY(change.at(0).toInt() >= before.trimmed().size());
     server.stream(QStringLiteral(" Finished."),true);
     QTRY_VERIFY(!widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->isEnabled());
     QVERIFY(history->toPlainText().contains(server.answer));
@@ -1368,4 +1386,123 @@ void AiAssistantTest::deleteOtherChats()
     Okular::Document reopened(nullptr); QVERIFY(open(reopened, saved));
     QVERIFY(SessionStore::load(&reopened, &session, &error));
     QCOMPARE(session.workspaces.size(), 1); QVERIFY(session.messages.isEmpty());
+}
+
+void AiAssistantTest::requestPopupKeepsLayout()
+{
+    QTemporaryDir directory; const auto path = directory.filePath(QStringLiteral("popup.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    Okular::Document document(nullptr); QVERIFY(open(document, path));
+    FakeEndpoint server; server.hold = true; QVERIFY(server.listen(QHostAddress::LocalHost));
+    AssistantWidget widget(&document, nullptr); configure(widget, server); widget.resize(540,800); widget.show();
+    auto *history = widget.findChild<QTextBrowser *>();
+    auto *question = widget.findChild<QPlainTextEdit *>();
+    auto *activity = widget.findChild<QToolButton *>(QStringLiteral("aiRequestActivity")); QVERIFY(activity);
+    auto *popup = widget.findChild<QWidget *>(QStringLiteral("aiRequests")); QVERIFY(popup);
+    QTest::qWait(30);
+    const auto bounds = history->geometry(); const auto composer = question->geometry(); const auto button = activity->geometry();
+    QVERIFY(popup->isWindow()); QVERIFY(!popup->isVisible());
+    question->setPlainText(QStringLiteral("First popup request")); answerSharing(); widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
+    QTRY_VERIFY(server.request.contains("First popup request")); QTRY_VERIFY(activity->text().contains(QLatin1String("1")));
+    QCOMPARE(history->geometry(), bounds); QCOMPARE(question->geometry(), composer); QCOMPARE(activity->geometry(), button);
+    QVERIFY(!popup->isVisible());
+    activity->click(); QTRY_VERIFY(popup->isVisible());
+    if (qEnvironmentVariableIsSet("OKULAIR_CHAT_POLISH_PREVIEW")) { QVERIFY(widget.grab().save(QStringLiteral("/tmp/okulair-activity-running.png"))); QVERIFY(popup->grab().save(QStringLiteral("/tmp/okulair-activity-popup.png"))); }
+    QCOMPARE(history->geometry(), bounds); QCOMPARE(question->geometry(), composer);
+    QTest::keyClick(popup, Qt::Key_Escape); QTRY_VERIFY(!popup->isVisible());
+    QVERIFY(widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->isEnabled());
+    question->setPlainText(QStringLiteral("Queued popup request")); widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
+    QCOMPARE(widget.findChild<QListWidget *>(QStringLiteral("aiRequestList"))->count(), 2);
+    activity->click(); QTRY_VERIFY(popup->isVisible());
+    auto *list = widget.findChild<QListWidget *>(QStringLiteral("aiRequestList"));
+    list->itemWidget(list->item(1))->findChild<QToolButton *>()->click(); QCOMPARE(list->count(), 1);
+    widget.findChild<QToolButton *>(QStringLiteral("aiCancelRunningRequest"))->click();
+    QTRY_COMPARE(list->count(), 0); QVERIFY(!popup->isVisible());
+    QTRY_COMPARE(history->geometry(), bounds); QCOMPARE(question->geometry(), composer); QCOMPARE(activity->geometry(), button);
+    if (qEnvironmentVariableIsSet("OKULAIR_CHAT_POLISH_PREVIEW")) QVERIFY(widget.grab().save(QStringLiteral("/tmp/okulair-activity-preview.png")));
+}
+
+void AiAssistantTest::progressivelyFormattedAnswer()
+{
+    QTemporaryDir directory; const auto path = directory.filePath(QStringLiteral("formatted.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    Okular::Document document(nullptr); QVERIFY(open(document, path));
+    FakeEndpoint server; server.hold = true; QVERIFY(server.listen(QHostAddress::LocalHost));
+    AssistantWidget widget(&document, nullptr); configure(widget, server); widget.resize(540,800); widget.show();
+    auto *history = widget.findChild<QTextBrowser *>(); auto *question = widget.findChild<QPlainTextEdit *>();
+    question->setPlainText(QStringLiteral("Format this answer")); answerSharing(); widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
+    QTRY_VERIFY(server.request.contains("Format this answer"));
+    server.stream(QStringLiteral("## Main goal\n\n- **Understand"));
+    QTRY_VERIFY(history->toPlainText().contains(QLatin1String("Understand")));
+    QVERIFY(!history->toPlainText().contains(QLatin1String("##"))); QVERIFY(!history->toPlainText().contains(QLatin1String("**")));
+    QTextCursor bold = history->document()->find(QStringLiteral("Understand")); QVERIFY(!bold.isNull()); QVERIFY(bold.charFormat().fontWeight() >= QFont::Bold);
+    QTextCursor heading = history->document()->find(QStringLiteral("Main goal")); QVERIFY(heading.charFormat().fontWeight() >= QFont::Bold);
+    server.stream(QStringLiteral(" the method**\n\n```python\nprint('safe')\n```\n<img src=\"https://example.com/private.png\">"));
+    QTRY_VERIFY(history->toPlainText().contains(QLatin1String("print('safe')")));
+    QVERIFY(history->toPlainText().contains(QLatin1String("<img src="))); // Provider HTML is always literal.
+    QVERIFY(!history->toHtml().contains(QLatin1String("<img")));
+    const auto before = history->toPlainText();
+    server.stream(QString(), true);
+    QTRY_VERIFY(!widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->isEnabled());
+    const auto after = history->toPlainText();
+    QCOMPARE(after.mid(after.indexOf(QStringLiteral("Main goal"))).trimmed(), before.mid(before.indexOf(QStringLiteral("Main goal"))).trimmed());
+    if (qEnvironmentVariableIsSet("OKULAIR_CHAT_POLISH_PREVIEW")) QVERIFY(widget.grab().save(QStringLiteral("/tmp/okulair-formatted-preview.png")));
+}
+
+void AiAssistantTest::cancelledHighlightStatus()
+{
+    QTemporaryDir directory; const auto path = directory.filePath(QStringLiteral("cancel-status.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    Okular::Document document(nullptr); QVERIFY(open(document, path));
+    FakeEndpoint server; server.hold = true; QVERIFY(server.listen(QHostAddress::LocalHost));
+    AssistantWidget widget(&document, nullptr); configure(widget, server);
+    auto *status = widget.findChild<KMessageWidget *>(QStringLiteral("aiStatus"));
+    answerSharing(); widget.findChild<QPushButton *>(QStringLiteral("aiGenerateHighlights"))->click();
+    QTRY_VERIFY(!server.request.isEmpty());
+    QVERIFY(status->text().contains(QLatin1String("Highlighting in background")));
+    widget.findChild<QToolButton *>(QStringLiteral("aiCancelHighlights"))->click();
+    QVERIFY(status->text().contains(QLatin1String("Highlighting cancelled")));
+    QVERIFY(!status->text().contains(QLatin1String("Highlighting in background")));
+    QCOMPARE(widget.findChild<QListWidget *>(QStringLiteral("aiRequestList"))->count(), 0);
+    QTest::qWait(100);
+    QVERIFY(status->text().contains(QLatin1String("Highlighting cancelled")));
+    // A cancellation must not claim that an independent chat request stopped.
+    server.request.clear(); widget.findChild<QPushButton *>(QStringLiteral("aiGenerateHighlights"))->click();
+    QTRY_VERIFY(!server.request.isEmpty());
+    widget.findChild<QPlainTextEdit *>()->setPlainText(QStringLiteral("Keep this chat running"));
+    widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
+    QTRY_VERIFY(server.request.contains("Keep this chat running"));
+    widget.findChild<QToolButton *>(QStringLiteral("aiCancelHighlights"))->click();
+    QVERIFY(status->text().contains(QLatin1String("current AI request continues")));
+    QVERIFY(widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->isEnabled());
+    QCOMPARE(widget.findChild<QListWidget *>(QStringLiteral("aiRequestList"))->count(), 1);
+    widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->click();
+}
+
+void AiAssistantTest::groupedEvidenceLinks()
+{
+    QTemporaryDir directory; const auto path = directory.filePath(QStringLiteral("grouped.pdf"));
+    QVERIFY(QFile::copy(QStringLiteral(KDESRCDIR "data/file1.pdf"), path));
+    Okular::Document document(nullptr); QVERIFY(open(document, path));
+    FakeEndpoint server; QVERIFY(server.listen(QHostAddress::LocalHost));
+    server.answer = QStringLiteral("Two passages [p. 1 | some random text][p. 1 | pdf file][p. 1 | some random text]. Another claim [p. 1 | some random text].");
+    AssistantWidget widget(&document, nullptr); configure(widget, server);
+    widget.findChild<QPlainTextEdit *>()->setPlainText(QStringLiteral("Cite two passages"));
+    answerSharing(); widget.findChild<QPushButton *>(QStringLiteral("aiAsk"))->click();
+    QTRY_VERIFY(!widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->isEnabled());
+    auto *history = widget.findChild<QTextBrowser *>();
+    QVERIFY(history->toPlainText().contains(QStringLiteral("[p. 1: 1, 2]")));
+    QCOMPARE(history->toPlainText().count(QStringLiteral("[p. 1]")), 1); // Separate claims keep their own anchor.
+    QVERIFY(!history->toPlainText().contains(QStringLiteral("[p. 1][p. 1]")));
+    QCOMPARE(history->toHtml().count(QStringLiteral("okulair://evidence/")), 3); // Adjacent exact duplicates collapse.
+    auto links = QRegularExpression(QStringLiteral("href=\"(okulair://evidence/[^\"]+)\"")).globalMatch(history->toHtml());
+    QStringList targets;
+    while (links.hasNext()) targets.append(links.next().captured(1));
+    QCOMPARE(targets.size(), 3); QVERIFY(targets.at(0) != targets.at(1)); QCOMPARE(targets.at(0), targets.at(2));
+    for (const auto &target : targets) QMetaObject::invokeMethod(history, "anchorClicked", Qt::DirectConnection, Q_ARG(QUrl, QUrl(target)));
+    const auto saved = directory.filePath(QStringLiteral("saved.pdf")); QString error;
+    QVERIFY(document.saveChanges(saved, &error));
+    Okular::Document reopened(nullptr); QVERIFY(open(reopened, saved));
+    AssistantWidget restored(&reopened, nullptr);
+    QVERIFY(restored.findChild<QTextBrowser *>()->toPlainText().contains(QStringLiteral("[p. 1: 1, 2]")));
 }
