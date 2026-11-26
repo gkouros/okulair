@@ -34,6 +34,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QTextTable>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -1441,6 +1442,21 @@ void AiAssistantTest::progressivelyFormattedAnswer()
     QTRY_VERIFY(history->toPlainText().contains(QLatin1String("print('safe')")));
     QVERIFY(history->toPlainText().contains(QLatin1String("<img src="))); // Provider HTML is always literal.
     QVERIFY(!history->toHtml().contains(QLatin1String("<img")));
+    server.stream(QStringLiteral(R"(\n**MAE** \\(|\text{prediction} - \text{target}|\\). **MSE** \((\text{prediction} - \text{target})^2\). `\(x^2\)` \(\frac{1}{2}\))"));
+    QTRY_VERIFY(history->toPlainText().contains(QLatin1String("|prediction - target|")));
+    QVERIFY(history->toPlainText().contains(QLatin1String("(prediction - target)2")));
+    QVERIFY(history->toPlainText().contains(QLatin1String(R"(\(x^2\))")));
+    QVERIFY(history->toPlainText().contains(QLatin1String(R"(\(\frac{1}{2}\))")));
+    QTextCursor exponent = history->document()->find(QStringLiteral("2"), history->document()->find(QStringLiteral("(prediction - target)")));
+    QVERIFY(!exponent.isNull()); QCOMPARE(exponent.charFormat().verticalAlignment(), QTextCharFormat::AlignSuperScript);
+    server.stream(QStringLiteral("\n\\| Metric | Calculation | If an error doubles |\\\n\\|---|---|---|\\\n\\| MAE | Average of \\\\(|\\text{prediction} - \\text{actual}|\\\\) | doubles |\\\n\\| MSE | Average of \\\\((\\text{prediction} - \\text{actual})^2\\\\) | quadruples |\\\n"));
+    QTRY_VERIFY(history->toPlainText().contains(QLatin1String("quadruples")));
+    const auto metric = history->document()->find(QStringLiteral("Metric"));
+    QVERIFY(metric.currentTable());
+    QCOMPARE(metric.currentTable()->columns(), 3);
+    QCOMPARE(metric.currentTable()->rows(), 3);
+    QVERIFY(history->toPlainText().contains(QLatin1String("|prediction - actual|")));
+    QVERIFY(!history->toPlainText().contains(QLatin1String("|---|")));
     const auto before = history->toPlainText();
     server.stream(QString(), true);
     QTRY_VERIFY(!widget.findChild<QPushButton *>(QStringLiteral("aiStop"))->isEnabled());

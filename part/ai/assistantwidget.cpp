@@ -701,27 +701,111 @@ void AssistantWidget::load(bool recoverJournal)
     }
 }
 
+// Format a deliberately small, safe TeX subset using QTextDocument's rich text.
+// Leave expressions outside this subset untouched instead of dropping notation.
+static QString inlineMath(const QString &source)
+{
+    QString formula = source.toHtmlEscaped();
+    formula.replace(QRegularExpression(QStringLiteral(R"(\\text\{([^{}]*)\})")), QStringLiteral("\\1"));
+    formula.replace(QRegularExpression(QStringLiteral(R"(\^\{([^{}]+)\}|\^([A-Za-z0-9]))")), QStringLiteral("<sup>\\1\\2</sup>"));
+    formula.replace(QRegularExpression(QStringLiteral(R"(_\{([^{}]+)\}|_([A-Za-z0-9]))")), QStringLiteral("<sub>\\1\\2</sub>"));
+    if (formula.contains(QLatin1Char('\\')) || formula.contains(QLatin1Char('{')) || formula.contains(QLatin1Char('}'))
+        || formula.contains(QLatin1Char('^')) || formula.contains(QLatin1Char('_'))) return {};
+    return formula;
+}
+
+// Split table cells without treating absolute-value bars inside inline math or
+// pipes inside code spans as column boundaries. Providers sometimes escape
+// every table delimiter, so accept both forms at the start of a table row.
+static QStringList tableCells(QString line)
+{
+    line = line.trimmed();
+    if (line.startsWith(QLatin1String("\\|"))) line.remove(0, 1);
+    if (!line.startsWith(QLatin1Char('|'))) return {};
+    QStringList cells;
+    QString cell;
+    bool math = false, code = false;
+    for (qsizetype i = 1; i < line.size(); ++i) {
+        if (line.at(i) == QLatin1Char('`')) code = !code;
+        if (!code && line.at(i) == QLatin1Char('\\')) {
+            qsizetype j = i;
+            while (j < line.size() && line.at(j) == QLatin1Char('\\')) ++j;
+            if (j < line.size() && (line.at(j) == QLatin1Char('(') || line.at(j) == QLatin1Char(')'))) {
+                math = line.at(j) == QLatin1Char('(');
+                cell += line.mid(i, j - i + 1); i = j; continue;
+            }
+            if (!math && j == i + 1 && j < line.size() && line.at(j) == QLatin1Char('|')) {
+                cells.append(cell.trimmed()); cell.clear(); i = j; continue;
+            }
+        }
+        if (!math && !code && line.at(i) == QLatin1Char('|')) { cells.append(cell.trimmed()); cell.clear(); }
+        else cell += line.at(i);
+    }
+    if (!cell.trimmed().isEmpty()) cells.append(cell.trimmed());
+    return cells;
+}
+
 QString AssistantWidget::formattedAnswer(const QString &text)
 {
-    // evidenceBody escapes provider HTML and creates only local source links.
-    // Apply the same small, safe Markdown subset during and after streaming.
-    const auto lines = text.split(QLatin1Char('\n'));
-    QStringList rendered;
-    bool fenced = false;
-    for (const auto &line : lines) {
-        if (line.trimmed().startsWith(QLatin1String("```"))) { fenced = !fenced; continue; }
-        if (fenced) {
-            rendered.append(QStringLiteral("<span style=\"font-family:monospace; white-space:pre-wrap;\">%1</span>").arg(line.toHtmlEscaped()));
-            continue;
+    const auto renderInline = [this](const QString &line) {
+        static const QRegularExpression mathPattern(QStringLiteral(R"(\\{1,2}\((.+?)\\{1,2}\))"));
+        QString body;
+        qsizetype previous = 0;
+        auto matches = mathPattern.globalMatch(line);
+        while (matches.hasNext()) {
+            const auto match = matches.next();
+            if (line.left(match.capturedStart()).count(QLatin1Char('`')) % 2) continue;
+            const auto math = inlineMath(match.captured(1));
+            if (math.isEmpty()) continue;
+            body += evidenceBody(line.mid(previous, match.capturedStart() - previous));
+            body += math;
+            previous = match.capturedEnd();
         }
-        auto body = evidenceBody(line);
+        body += evidenceBody(line.mid(previous));
         body.replace(QRegularExpression(QStringLiteral("^#{1,6} +(.+)$")), QStringLiteral("<b>\\1</b>"));
-        // An open bold span is rendered immediately instead of flashing '**'.
         if (body.count(QStringLiteral("**")) % 2) body += QStringLiteral("**");
         body.replace(QRegularExpression(QStringLiteral("\\*\\*([^*]+)\\*\\*")), QStringLiteral("<b>\\1</b>"));
         body.replace(QRegularExpression(QStringLiteral("`([^`]+)`")), QStringLiteral("<span style=\"font-family:monospace;\">\\1</span>"));
         body.replace(QRegularExpression(QStringLiteral("^[-*] +")), QStringLiteral("• "));
-        rendered.append(body);
+        return body;
+    };
+    const auto lines = text.split(QLatin1Char('\n'));
+    const auto cleanLine = [](QString line) {
+        // A final unpaired backslash is a Markdown hard line break.
+        qsizetype slashes = 0;
+        while (slashes < line.size() && line.at(line.size() - 1 - slashes) == QLatin1Char('\\')) ++slashes;
+        if (slashes % 2) line.chop(1);
+        return line;
+    };
+    static const QRegularExpression separator(QStringLiteral(R"(^:?-{3,}:?$)"));
+    QStringList rendered;
+    bool fenced = false;
+    for (qsizetype i = 0; i < lines.size(); ++i) {
+        const auto &raw = lines.at(i);
+        if (raw.trimmed().startsWith(QLatin1String("```"))) { fenced = !fenced; continue; }
+        if (fenced) {
+            rendered.append(QStringLiteral("<span style=\"font-family:monospace; white-space:pre-wrap;\">%1</span>").arg(raw.toHtmlEscaped()));
+            continue;
+        }
+        const auto line = cleanLine(raw);
+        const auto headers = tableCells(line);
+        const auto rules = i + 1 < lines.size() ? tableCells(cleanLine(lines.at(i + 1))) : QStringList();
+        bool isTable = !headers.isEmpty() && headers.size() == rules.size();
+        for (const auto &rule : rules) isTable = isTable && separator.match(rule).hasMatch();
+        if (isTable) {
+            QString table = QStringLiteral("<table border=\"1\" cellspacing=\"0\" cellpadding=\"4\"><tr>");
+            for (const auto &header : headers) table += QStringLiteral("<th>%1</th>").arg(renderInline(header));
+            table += QStringLiteral("</tr>");
+            ++i;
+            while (i + 1 < lines.size()) {
+                const auto cells = tableCells(cleanLine(lines.at(i + 1)));
+                if (cells.size() != headers.size()) break;
+                ++i; table += QStringLiteral("<tr>");
+                for (const auto &cell : cells) table += QStringLiteral("<td>%1</td>").arg(renderInline(cell));
+                table += QStringLiteral("</tr>");
+            }
+            rendered.append(table + QStringLiteral("</table>"));
+        } else rendered.append(renderInline(line));
     }
     return rendered.join(QStringLiteral("<br>"));
 }
